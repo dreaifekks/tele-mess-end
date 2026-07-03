@@ -697,6 +697,10 @@ struct DeleteAccountRequest: Encodable {
     var source: String = "telegram"
 }
 
+struct DeleteOperationEventRequest: Encodable {
+    var id: Int
+}
+
 struct DiscoverOriginsRequest: Encodable {
     var accountID: String
     var includeTopics: Bool = true

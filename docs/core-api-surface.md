@@ -398,6 +398,7 @@ Mac V1:
 Endpoint:
 
 - `GET /manage/operation-events?account_id=main&status=failed&limit=100`
+- `DELETE /manage/operation-events` with body `{"id": 1}`
 
 Fields:
 
@@ -417,7 +418,7 @@ Fields:
 Mac V1:
 
 - Dashboard failed/partial/rate-limited summary.
-- Dedicated diagnostics table with account/status filters.
+- Dedicated diagnostics table with account/status filters and per-event delete.
 
 ## V1 API Client Boundary
 

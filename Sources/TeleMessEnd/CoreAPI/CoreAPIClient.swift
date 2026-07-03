@@ -206,6 +206,15 @@ struct CoreAPIClient: Sendable {
         return response.items
     }
 
+    func deleteOperationEvent(id: Int) async throws -> DeleteResult {
+        let response: CoreWriteResponse<DeleteResult> = try await send(
+            "DELETE",
+            path: "/manage/operation-events",
+            body: DeleteOperationEventRequest(id: id)
+        )
+        return response.item
+    }
+
     func listMediaFiles(accountID: String? = nil, chatID: Int? = nil, messageID: Int? = nil, limit: Int = 500) async throws -> [CoreMediaFile] {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
         if let accountID, !accountID.isEmpty {

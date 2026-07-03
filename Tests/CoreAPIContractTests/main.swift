@@ -422,6 +422,16 @@ enum CoreAPIContractTests {
         )
         try expectEqual(try await eventsClient.listOperationEvents(accountID: "main", status: "failed").first?.errorCode, "rate_limited")
 
+        let deleteEventClient = makeClient(
+            expectedMethod: "DELETE",
+            expectedPath: "/manage/operation-events",
+            responseJSON: #"{"item": {"deleted_rows": 1}}"#,
+            verify: { request in
+                try expectEqual(try requestJSONObject(request)["id"] as? Int, 1)
+            }
+        )
+        try expectEqual(try await deleteEventClient.deleteOperationEvent(id: 1).deletedRows, 1)
+
         let mediaClient = makeClient(
             expectedPath: "/sync/media-files",
             expectedQueryItems: ["account_id=main", "chat_id=-1001", "message_id=99", "limit=500"],

@@ -6,6 +6,7 @@ struct DiagnosticsView: View {
     @State private var selectedParticipantID: CoreParticipant.ID?
     @State private var selectedCursorID: CoreCaptureCursor.ID?
     @State private var selectedMediaFileID: CoreMediaFile.ID?
+    @State private var pendingDeleteOperationEvent: CoreOperationEvent?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -57,6 +58,29 @@ struct DiagnosticsView: View {
         .onChange(of: model.diagnosticsSelection) {
             clearDetailSelection()
         }
+        .alert("Delete operation event?", isPresented: Binding(
+            get: { pendingDeleteOperationEvent != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteOperationEvent = nil
+                }
+            }
+        )) {
+            Button("Delete", role: .destructive) {
+                if let event = pendingDeleteOperationEvent {
+                    Task {
+                        await model.deleteOperationEvent(event)
+                        selectedOperationEventID = nil
+                    }
+                }
+                pendingDeleteOperationEvent = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteOperationEvent = nil
+            }
+        } message: {
+            Text("This removes the selected operation event row from the core diagnostics list.")
+        }
     }
 
     @ViewBuilder
@@ -77,7 +101,9 @@ struct DiagnosticsView: View {
             if model.operationEvents.isEmpty {
                 EmptyStateView(title: "No operation events", detail: "Failed, partial, and rate-limited core operations appear here.", systemImage: "exclamationmark.triangle")
             } else {
-                OperationEventsTable(events: model.operationEvents, selection: $selectedOperationEventID)
+                OperationEventsTable(events: model.operationEvents, selection: $selectedOperationEventID) { event in
+                    pendingDeleteOperationEvent = event
+                }
             }
         case .participants:
             if model.participants.isEmpty {

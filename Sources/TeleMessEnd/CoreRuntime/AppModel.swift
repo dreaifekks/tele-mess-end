@@ -349,6 +349,19 @@ final class AppModel {
         }
     }
 
+    func deleteOperationEvent(_ event: CoreOperationEvent) async {
+        await withLoading("Deleting operation event") {
+            let client = try makeClient()
+            _ = try await client.deleteOperationEvent(id: event.id)
+            operationEvents = try await client.listOperationEvents(
+                accountID: diagnosticsAccountFilter.nilIfEmpty,
+                status: diagnosticsStatusFilter.nilIfEmpty,
+                limit: 100
+            )
+            statusMessage = "Operation event deleted"
+        }
+    }
+
     func refreshParticipants(accountID: String, originID: Int) async {
         await withLoading("Refreshing participants") {
             _ = try await makeClient().refreshParticipants(accountID: accountID, originID: originID, limit: 500)

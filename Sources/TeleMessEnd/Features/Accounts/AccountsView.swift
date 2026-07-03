@@ -3,6 +3,7 @@ import SwiftUI
 struct AccountsView: View {
     @Bindable var model: AppModel
     @State private var selectedAccountID: CoreAccount.ID?
+    @State private var tableSelection: CoreAccount.ID?
     @State private var isCreatingAccount = false
     @State private var isEditingPhone = false
     @State private var accountID = ""
@@ -34,7 +35,7 @@ struct AccountsView: View {
                 if model.accounts.isEmpty {
                     EmptyStateView(title: "No accounts", detail: "Create account metadata, then request a Telegram login code.", systemImage: "person.badge.plus")
                 } else {
-                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, activate: { account in
+                    AccountsTable(accounts: model.accounts, selection: $tableSelection, activate: { account in
                         selectAccount(account)
                     }, requestDelete: { account in
                         pendingDeleteAccount = account
@@ -53,6 +54,7 @@ struct AccountsView: View {
         .onChange(of: selectedAccountID) {
             if selectedAccountID != nil {
                 isCreatingAccount = false
+                tableSelection = selectedAccountID
             }
             loadSelectedAccount()
         }
@@ -206,6 +208,7 @@ struct AccountsView: View {
     private func selectAccount(_ account: CoreAccount) {
         isCreatingAccount = false
         selectedAccountID = account.id
+        tableSelection = account.id
         accountID = account.accountID
         displayName = account.displayName ?? ""
         phone = account.phone ?? ""
@@ -218,10 +221,12 @@ struct AccountsView: View {
         if isCreatingAccount { return }
         if let selectedAccountID,
            model.accounts.contains(where: { $0.id == selectedAccountID }) {
+            tableSelection = selectedAccountID
             loadSelectedAccount()
             return
         }
         selectedAccountID = model.accounts.first?.id
+        tableSelection = selectedAccountID
         loadSelectedAccount()
     }
 }
@@ -248,7 +253,7 @@ private struct AccountsTable: View {
                 }
             }
             TableColumn("Auth") { account in
-                StatusBadge(text: account.authState ?? "unknown", kind: account.lastError == nil ? .neutral : .error)
+                StatusBadge(text: account.authState ?? "unknown", kind: authBadgeKind(for: account))
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
                         activate(account)
@@ -297,6 +302,22 @@ private struct AccountsTable: View {
                 .buttonStyle(.borderless)
             }
             .width(min: 54, ideal: 64, max: 72)
+        }
+    }
+
+    private func authBadgeKind(for account: CoreAccount) -> StatusBadgeKind {
+        if account.lastError != nil {
+            return .error
+        }
+        switch (account.authState ?? "").lowercased() {
+        case "authorized", "signed_in", "authenticated", "ready":
+            return .success
+        case "pending", "code_requested", "code_sent", "password_required", "2fa_required", "needs_code", "needs_password":
+            return .warning
+        case "unauthorized", "failed", "error":
+            return .error
+        default:
+            return .neutral
         }
     }
 }

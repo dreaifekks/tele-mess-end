@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct RawPayloadView: View {
@@ -6,8 +7,16 @@ struct RawPayloadView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
+            HStack {
+                Text(title)
+                    .font(.headline)
+                Spacer()
+                Button {
+                    copyPayload()
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
             ScrollView {
                 Text(payloadText)
                     .font(.system(.caption, design: .monospaced))
@@ -29,5 +38,10 @@ struct RawPayloadView: View {
             return string
         }
         return payload.description
+    }
+
+    private func copyPayload() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payloadText, forType: .string)
     }
 }

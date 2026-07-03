@@ -5,6 +5,7 @@ import Observation
 @Observable
 final class LocalCoreProcessController {
     private var process: Process?
+    private var isStopping = false
     var isRunning = false
     var lastOutput = ""
     var lastError: String?
@@ -15,6 +16,9 @@ final class LocalCoreProcessController {
             return
         }
         stop()
+        lastOutput = ""
+        lastError = nil
+        isStopping = false
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -33,6 +37,17 @@ final class LocalCoreProcessController {
                 self?.lastOutput += text
             }
         }
+        process.terminationHandler = { [weak self] process in
+            Task { @MainActor in
+                guard let self, self.process === process else { return }
+                self.process = nil
+                self.isRunning = false
+                if !self.isStopping && process.terminationStatus != 0 {
+                    self.lastError = "Local core exited with status \(process.terminationStatus)."
+                }
+                self.isStopping = false
+            }
+        }
 
         do {
             try process.run()
@@ -46,6 +61,7 @@ final class LocalCoreProcessController {
     }
 
     func stop() {
+        isStopping = process != nil
         process?.terminate()
         process = nil
         isRunning = false

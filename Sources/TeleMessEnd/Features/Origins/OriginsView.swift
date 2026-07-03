@@ -40,6 +40,12 @@ struct OriginsView: View {
                     Text("Unknown").tag("unknown")
                 }
                 .frame(width: 150)
+                Picker("Backup", selection: $model.originBackupFilter) {
+                    ForEach(OriginBackupFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+                .frame(width: 150)
                 Toggle("Archived", isOn: $model.includeArchivedOrigins)
                 Button {
                     Task { await model.loadOrigins() }
@@ -51,6 +57,12 @@ struct OriginsView: View {
                 TextField("Tag filter", text: $model.originTagFilter)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
+                Picker("Sort", selection: $model.originSort) {
+                    ForEach(OriginSort.allCases) { sort in
+                        Text(sort.title).tag(sort)
+                    }
+                }
+                .frame(width: 190)
                 Button {
                     let account = model.originAccountFilter.isEmpty ? model.selectedProfile?.name ?? "" : model.originAccountFilter
                     Task { await model.discoverOrigins(accountID: account) }
@@ -121,6 +133,7 @@ private struct OriginInspectorView: View {
     @State private var captureMediaMetadata = true
     @State private var downloadMedia = false
     @State private var tags = ""
+    @State private var confirmDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -180,7 +193,7 @@ private struct OriginInspectorView: View {
                 }
 
                 Button(role: .destructive) {
-                    Task { await model.deleteSelectedOrigin() }
+                    confirmDelete = true
                 } label: {
                     Label("Delete Origin Metadata", systemImage: "trash")
                 }
@@ -195,6 +208,14 @@ private struct OriginInspectorView: View {
             syncPolicy()
         }
         .onAppear(perform: syncPolicy)
+        .alert("Delete origin metadata?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteSelectedOrigin() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the selected origin metadata, policy, and cursor rows through the core API. Stored messages remain unless the core changes that contract.")
+        }
     }
 
     private func syncPolicy() {

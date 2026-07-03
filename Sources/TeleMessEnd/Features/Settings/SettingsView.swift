@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Bindable var model: AppModel
     @State private var draft = CoreProfile.defaultLocal
     @State private var token = ""
+    @State private var confirmDeleteProfile = false
 
     var body: some View {
         TabView {
@@ -17,6 +18,15 @@ struct SettingsView: View {
         .onAppear(perform: loadDraft)
         .onChange(of: model.profileStore.selectedProfileID) {
             loadDraft()
+        }
+        .alert("Delete profile?", isPresented: $confirmDeleteProfile) {
+            Button("Delete", role: .destructive) {
+                model.deleteSelectedProfile()
+                loadDraft()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the selected local app profile and its stored token. It does not change the core service.")
         }
     }
 
@@ -74,6 +84,12 @@ struct SettingsView: View {
                         } label: {
                             Label("Test", systemImage: "network")
                         }
+                        Button(role: .destructive) {
+                            confirmDeleteProfile = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .disabled(model.profileStore.profiles.count <= 1)
                         Spacer()
                         Button {
                             draft = model.profileStore.addRemoteProfile()

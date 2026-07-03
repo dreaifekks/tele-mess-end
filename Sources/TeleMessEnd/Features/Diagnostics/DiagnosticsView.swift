@@ -2,6 +2,10 @@ import SwiftUI
 
 struct DiagnosticsView: View {
     @Bindable var model: AppModel
+    @State private var selectedOperationEventID: CoreOperationEvent.ID?
+    @State private var selectedParticipantID: CoreParticipant.ID?
+    @State private var selectedCursorID: CoreCaptureCursor.ID?
+    @State private var selectedMediaFileID: CoreMediaFile.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -50,44 +54,124 @@ struct DiagnosticsView: View {
         .task {
             await model.loadDiagnostics()
         }
+        .onChange(of: model.diagnosticsSelection) {
+            clearDetailSelection()
+        }
     }
 
     @ViewBuilder
     private var content: some View {
+        HSplitView {
+            tableContent
+
+            RawPayloadView(title: selectedDetailTitle, payload: selectedDetailPayload)
+                .frame(minWidth: 280, idealWidth: 360, maxWidth: 520)
+                .padding(.leading, 12)
+        }
+    }
+
+    @ViewBuilder
+    private var tableContent: some View {
         switch model.diagnosticsSelection {
         case .operationEvents:
             if model.operationEvents.isEmpty {
                 EmptyStateView(title: "No operation events", detail: "Failed, partial, and rate-limited core operations appear here.", systemImage: "exclamationmark.triangle")
             } else {
-                OperationEventsTable(events: model.operationEvents)
+                OperationEventsTable(events: model.operationEvents, selection: $selectedOperationEventID)
             }
         case .participants:
             if model.participants.isEmpty {
                 EmptyStateView(title: "No participants", detail: "Filter by account/origin or refresh participants from Telegram.", systemImage: "person.2")
             } else {
-                ParticipantsTable(participants: model.participants)
+                ParticipantsTable(participants: model.participants, selection: $selectedParticipantID)
             }
         case .cursors:
             if model.cursors.isEmpty {
                 EmptyStateView(title: "No capture cursors", detail: "Backfill and catch-up cursor rows appear here.", systemImage: "point.3.connected.trianglepath.dotted")
             } else {
-                CaptureCursorsTable(cursors: model.cursors)
+                CaptureCursorsTable(cursors: model.cursors, selection: $selectedCursorID)
             }
         case .media:
             if model.mediaFiles.isEmpty {
                 EmptyStateView(title: "No media files", detail: "Downloaded media metadata appears here when policies enable media download.", systemImage: "paperclip")
             } else {
-                MediaFilesTable(files: model.mediaFiles)
+                MediaFilesTable(files: model.mediaFiles, selection: $selectedMediaFileID)
             }
         }
+    }
+
+    private var selectedDetailTitle: String {
+        switch model.diagnosticsSelection {
+        case .operationEvents:
+            if let event = selectedOperationEvent {
+                return "Operation Event #\(event.id)"
+            }
+            return "Operation Event Payload"
+        case .participants:
+            if let participant = selectedParticipant {
+                return participant.displayName ?? participant.username ?? "Participant \(participant.userID)"
+            }
+            return "Participant Payload"
+        case .cursors:
+            if let cursor = selectedCursor {
+                return "Cursor \(cursor.originID) / topic \(cursor.topicID)"
+            }
+            return "Cursor Payload"
+        case .media:
+            if let file = selectedMediaFile {
+                return "Media \(file.chatID) / \(file.messageID)"
+            }
+            return "Media Payload"
+        }
+    }
+
+    private var selectedDetailPayload: JSONValue? {
+        switch model.diagnosticsSelection {
+        case .operationEvents:
+            selectedOperationEvent?.rawJSON
+        case .participants:
+            selectedParticipant?.rawJSON
+        case .cursors:
+            selectedCursor?.rawJSON
+        case .media:
+            selectedMediaFile?.rawJSON
+        }
+    }
+
+    private var selectedOperationEvent: CoreOperationEvent? {
+        guard let selectedOperationEventID else { return nil }
+        return model.operationEvents.first { $0.id == selectedOperationEventID }
+    }
+
+    private var selectedParticipant: CoreParticipant? {
+        guard let selectedParticipantID else { return nil }
+        return model.participants.first { $0.id == selectedParticipantID }
+    }
+
+    private var selectedCursor: CoreCaptureCursor? {
+        guard let selectedCursorID else { return nil }
+        return model.cursors.first { $0.id == selectedCursorID }
+    }
+
+    private var selectedMediaFile: CoreMediaFile? {
+        guard let selectedMediaFileID else { return nil }
+        return model.mediaFiles.first { $0.id == selectedMediaFileID }
+    }
+
+    private func clearDetailSelection() {
+        selectedOperationEventID = nil
+        selectedParticipantID = nil
+        selectedCursorID = nil
+        selectedMediaFileID = nil
     }
 }
 
 private struct ParticipantsTable: View {
     var participants: [CoreParticipant]
+    @Binding var selection: CoreParticipant.ID?
 
     var body: some View {
-        Table(participants) {
+        Table(participants, selection: $selection) {
             TableColumn("Account") { Text($0.accountID) }
             TableColumn("Origin") { Text("\($0.originID)") }
             TableColumn("User") { participant in
@@ -106,9 +190,10 @@ private struct ParticipantsTable: View {
 
 private struct CaptureCursorsTable: View {
     var cursors: [CoreCaptureCursor]
+    @Binding var selection: CoreCaptureCursor.ID?
 
     var body: some View {
-        Table(cursors) {
+        Table(cursors, selection: $selection) {
             TableColumn("Account") { Text($0.accountID) }
             TableColumn("Origin") { cursor in
                 VStack(alignment: .leading, spacing: 2) {
@@ -127,9 +212,10 @@ private struct CaptureCursorsTable: View {
 
 private struct MediaFilesTable: View {
     var files: [CoreMediaFile]
+    @Binding var selection: CoreMediaFile.ID?
 
     var body: some View {
-        Table(files) {
+        Table(files, selection: $selection) {
             TableColumn("Downloaded") { Text(DisplayFormat.shortDateTime($0.downloadedAt)).foregroundStyle(.secondary) }
             TableColumn("Account") { Text($0.accountID) }
             TableColumn("Chat") { file in

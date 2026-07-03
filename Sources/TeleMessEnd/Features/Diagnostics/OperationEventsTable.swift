@@ -2,9 +2,10 @@ import SwiftUI
 
 struct OperationEventsTable: View {
     var events: [CoreOperationEvent]
+    @Binding var selection: CoreOperationEvent.ID?
 
     var body: some View {
-        Table(events) {
+        Table(events, selection: $selection) {
             TableColumn("Time") { event in
                 Text(DisplayFormat.shortDateTime(event.occurredAt))
                     .foregroundStyle(.secondary)

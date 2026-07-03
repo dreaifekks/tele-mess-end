@@ -56,6 +56,8 @@ final class AppModel {
     var originAccountFilter = ""
     var originTypeFilter = ""
     var originTagFilter = ""
+    var originBackupFilter: OriginBackupFilter = .any
+    var originSort: OriginSort = .lastMessageDesc
     var includeArchivedOrigins = false
     var selectedOriginID: CoreOrigin.ID?
 
@@ -79,12 +81,22 @@ final class AppModel {
     }
 
     var filteredOrigins: [CoreOrigin] {
-        origins.filter { origin in
+        let filtered = origins.filter { origin in
             if !originAccountFilter.isEmpty && !origin.accountID.localizedCaseInsensitiveContains(originAccountFilter) {
                 return false
             }
             if !originTypeFilter.isEmpty && origin.originType != originTypeFilter {
                 return false
+            }
+            switch originBackupFilter {
+            case .any:
+                break
+            case .enabled:
+                if origin.backupPolicy?.enabled != true { return false }
+            case .disabled:
+                if origin.backupPolicy?.enabled == true { return false }
+            case .missingPolicy:
+                if origin.backupPolicy != nil { return false }
             }
             if !originTagFilter.isEmpty {
                 let tags = origin.backupPolicy?.tags ?? ""
@@ -105,6 +117,7 @@ final class AppModel {
             }
             return true
         }
+        return sortOrigins(filtered)
     }
 
     func refreshCurrentSection() async {
@@ -125,6 +138,7 @@ final class AppModel {
     func validateActiveProfile() async {
         await withLoading("Validating profile") {
             let client = try makeClient()
+            _ = try await client.health()
             dashboard.coreState = try await client.fetchSyncState()
             dashboard.capabilities = try await client.fetchCapabilities()
             statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
@@ -334,6 +348,18 @@ final class AppModel {
         }
     }
 
+    func deleteSelectedProfile() {
+        guard let removed = profileStore.deleteSelected() else { return }
+        do {
+            try keychain.deleteToken(profileID: removed.id)
+            statusMessage = "Profile deleted"
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "Failed"
+        }
+    }
+
     func tokenForSelectedProfile() -> String {
         guard let selectedProfile else { return "" }
         return (try? keychain.readToken(profileID: selectedProfile.id)) ?? ""
@@ -378,6 +404,36 @@ final class AppModel {
             statusMessage = "Failed"
         }
         isLoading = false
+    }
+
+    private func sortOrigins(_ origins: [CoreOrigin]) -> [CoreOrigin] {
+        origins.sorted { lhs, rhs in
+            switch originSort {
+            case .lastMessageDesc:
+                return (lhs.lastMessageAt ?? "") > (rhs.lastMessageAt ?? "")
+            case .lastMessageAsc:
+                return (lhs.lastMessageAt ?? "") < (rhs.lastMessageAt ?? "")
+            case .titleAsc:
+                return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+            case .accountAsc:
+                if lhs.accountID == rhs.accountID {
+                    return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+                }
+                return lhs.accountID.localizedCaseInsensitiveCompare(rhs.accountID) == .orderedAscending
+            case .typeAsc:
+                if lhs.originType == rhs.originType {
+                    return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+                }
+                return lhs.originType.localizedCaseInsensitiveCompare(rhs.originType) == .orderedAscending
+            case .backupDesc:
+                let left = lhs.backupPolicy?.enabled == true
+                let right = rhs.backupPolicy?.enabled == true
+                if left == right {
+                    return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+                }
+                return left && !right
+            }
+        }
     }
 }
 

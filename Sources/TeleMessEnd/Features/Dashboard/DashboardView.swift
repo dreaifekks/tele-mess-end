@@ -45,7 +45,9 @@ struct DashboardView: View {
             MetricCard(title: "Messages", value: DisplayFormat.count(state?.messageCount), detail: "Archived rows", systemImage: "tray.full")
             MetricCard(title: "Last Event", value: DisplayFormat.count(state?.lastEventSeq), detail: "Sync cursor", systemImage: "arrow.left.arrow.right")
             MetricCard(title: "Operation Errors", value: DisplayFormat.count(state?.operationErrorCount), detail: "Failed, partial, rate limited", systemImage: "exclamationmark.triangle")
-            MetricCard(title: "Schema", value: state?.schemaVersion ?? "-", detail: state?.databaseID ?? "No database id", systemImage: "cylinder")
+            MetricCard(title: "Schema", value: state?.schemaVersion ?? "-", detail: "Core archive schema", systemImage: "square.stack.3d.up")
+            MetricCard(title: "Database", value: state?.databaseID ?? "-", detail: "Archive identity", systemImage: "cylinder")
+            MetricCard(title: "Server Time", value: DisplayFormat.shortDateTime(state?.serverTime), detail: "Core clock", systemImage: "clock")
         }
     }
 
@@ -83,7 +85,7 @@ struct DashboardView: View {
                     .background(.regularMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
-                OperationEventsTable(events: model.dashboard.operationEvents)
+                OperationEventsTable(events: model.dashboard.operationEvents, selection: .constant(nil))
                     .frame(minHeight: 180)
             }
         }

@@ -9,6 +9,7 @@ struct AccountsView: View {
     @State private var sessionDir = ""
     @State private var code = ""
     @State private var password = ""
+    @State private var pendingDeleteAccount: CoreAccount?
 
     var body: some View {
         HSplitView {
@@ -30,13 +31,15 @@ struct AccountsView: View {
                 if model.accounts.isEmpty {
                     EmptyStateView(title: "No accounts", detail: "Create account metadata, then request a Telegram login code.", systemImage: "person.badge.plus")
                 } else {
-                    AccountsTable(model: model, accounts: model.accounts) { account in
+                    AccountsTable(accounts: model.accounts, select: { account in
                         accountID = account.accountID
                         displayName = account.displayName ?? ""
                         phone = account.phone ?? ""
                         sessionName = account.sessionName ?? account.accountID
                         sessionDir = account.sessionDir ?? ""
-                    }
+                    }, requestDelete: { account in
+                        pendingDeleteAccount = account
+                    })
                 }
             }
             .padding(20)
@@ -46,6 +49,26 @@ struct AccountsView: View {
             if model.accounts.isEmpty {
                 await model.loadAccounts()
             }
+        }
+        .alert("Delete account metadata?", isPresented: Binding(
+            get: { pendingDeleteAccount != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteAccount = nil
+                }
+            }
+        )) {
+            Button("Delete", role: .destructive) {
+                if let account = pendingDeleteAccount {
+                    Task { await model.deleteAccount(account) }
+                }
+                pendingDeleteAccount = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteAccount = nil
+            }
+        } message: {
+            Text("This removes account management metadata through the core API. Archived messages remain unless the core changes that contract.")
         }
     }
 
@@ -104,9 +127,9 @@ struct AccountsView: View {
 }
 
 private struct AccountsTable: View {
-    var model: AppModel
     var accounts: [CoreAccount]
     var select: (CoreAccount) -> Void
+    var requestDelete: (CoreAccount) -> Void
 
     var body: some View {
         Table(accounts) {
@@ -136,7 +159,7 @@ private struct AccountsTable: View {
                         select(account)
                     }
                     Button(role: .destructive) {
-                        Task { await model.deleteAccount(account) }
+                        requestDelete(account)
                     } label: {
                         Image(systemName: "trash")
                     }

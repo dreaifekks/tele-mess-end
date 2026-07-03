@@ -50,9 +50,13 @@ struct OriginsView: View {
             HStack {
                 TextField("Search title, username, id", text: $model.originSearch)
                     .textFieldStyle(.roundedBorder)
-                TextField("Account", text: $model.originAccountFilter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
+                Picker("Account", selection: $model.originAccountFilter) {
+                    Text("Any account").tag("")
+                    ForEach(originAccountOptions, id: \.self) { accountID in
+                        Text(accountID).tag(accountID)
+                    }
+                }
+                .frame(width: 170)
                 Picker("Type", selection: $model.originTypeFilter) {
                     Text("Any type").tag("")
                     Text("Group").tag("group")
@@ -109,7 +113,7 @@ struct OriginsView: View {
                 originColumns
             }
         } else {
-            Table(originRows, selection: $model.selectedOriginID, sortOrder: $sortOrder) {
+            Table(originRows, selection: singleSelection, sortOrder: $sortOrder) {
                 originColumns
             }
         }
@@ -171,39 +175,56 @@ struct OriginsView: View {
         .width(min: 140, ideal: 180)
     }
 
-    private var sortedOrigins: [CoreOrigin] {
-        let candidates = sortOrder.isEmpty ? model.filteredOrigins : model.matchingOrigins
-        if sortOrder.isEmpty {
-            return candidates
+    private var singleSelection: Binding<CoreOrigin.ID?> {
+        Binding(
+            get: { model.selectedOriginID },
+            set: { nextSelection in
+                if model.selectedOriginID == nextSelection {
+                    model.selectedOriginID = nil
+                } else {
+                    model.selectedOriginID = nextSelection
+                }
+            }
+        )
+    }
+
+    private var originAccountOptions: [String] {
+        Array(Set(model.origins.map(\.accountID) + model.accounts.map(\.accountID))).sorted()
+    }
+
+    private var originGroups: [OriginGroup] {
+        let matches = Set(model.matchingOrigins.map(\.id))
+        let allGroups = Dictionary(grouping: model.origins, by: groupKey(for:))
+
+        let groups = allGroups.compactMap { _, origins -> OriginGroup? in
+            let parent = origins.first { !$0.isTopic } ?? origins.sorted(by: compareHierarchy).first
+            guard let parent else { return nil }
+
+            let topics = origins.filter(\.isTopic)
+            let parentMatches = matches.contains(parent.id)
+            let matchingTopics = topics.filter { matches.contains($0.id) }
+            guard parentMatches || !matchingTopics.isEmpty else { return nil }
+
+            let visibleTopics: [CoreOrigin]
+            if shouldShowTopicsForFilters {
+                visibleTopics = matchingTopics
+            } else if expandedGroups.contains(groupKey(for: parent)) {
+                visibleTopics = topics.filter { matches.contains($0.id) }
+            } else {
+                visibleTopics = []
+            }
+
+            return OriginGroup(parent: parent, topics: visibleTopics.sorted(by: compareForCurrentSort))
         }
-        return candidates.sorted { lhs, rhs in
-            if model.originBackupFirst {
-                let left = lhs.backupPolicy?.enabled == true
-                let right = rhs.backupPolicy?.enabled == true
-                if left != right {
-                    return left && !right
-                }
-            }
-            for comparator in sortOrder {
-                switch comparator.compare(lhs, rhs) {
-                case .orderedAscending:
-                    return true
-                case .orderedDescending:
-                    return false
-                case .orderedSame:
-                    continue
-                }
-            }
-            return compareHierarchy(lhs, rhs)
+
+        return groups.sorted { lhs, rhs in
+            compareForCurrentSort(lhs.parent, rhs.parent)
         }
     }
 
     private var originRows: [CoreOrigin] {
-        sortedOrigins.filter { origin in
-            if !origin.isTopic {
-                return true
-            }
-            return shouldShowTopicsForFilters || expandedGroups.contains(groupKey(for: origin))
+        originGroups.flatMap { group in
+            [group.parent] + group.topics
         }
     }
 
@@ -267,6 +288,34 @@ struct OriginsView: View {
         }
         return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
     }
+
+    private func compareForCurrentSort(_ lhs: CoreOrigin, _ rhs: CoreOrigin) -> Bool {
+        if model.originBackupFirst {
+            let left = lhs.backupPolicy?.enabled == true
+            let right = rhs.backupPolicy?.enabled == true
+            if left != right {
+                return left && !right
+            }
+        }
+
+        for comparator in sortOrder {
+            switch comparator.compare(lhs, rhs) {
+            case .orderedAscending:
+                return true
+            case .orderedDescending:
+                return false
+            case .orderedSame:
+                continue
+            }
+        }
+
+        return compareHierarchy(lhs, rhs)
+    }
+}
+
+private struct OriginGroup {
+    var parent: CoreOrigin
+    var topics: [CoreOrigin]
 }
 
 private struct OriginInspectorView: View {

@@ -34,7 +34,9 @@ struct AccountsView: View {
                 if model.accounts.isEmpty {
                     EmptyStateView(title: "No accounts", detail: "Create account metadata, then request a Telegram login code.", systemImage: "person.badge.plus")
                 } else {
-                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, requestDelete: { account in
+                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, activate: { account in
+                        selectAccount(account)
+                    }, requestDelete: { account in
                         pendingDeleteAccount = account
                     })
                 }
@@ -49,6 +51,9 @@ struct AccountsView: View {
             syncSelectionAfterAccountsChange()
         }
         .onChange(of: selectedAccountID) {
+            if selectedAccountID != nil {
+                isCreatingAccount = false
+            }
             loadSelectedAccount()
         }
         .onChange(of: model.accounts) {
@@ -198,6 +203,17 @@ struct AccountsView: View {
         isEditingPhone = false
     }
 
+    private func selectAccount(_ account: CoreAccount) {
+        isCreatingAccount = false
+        selectedAccountID = account.id
+        accountID = account.accountID
+        displayName = account.displayName ?? ""
+        phone = account.phone ?? ""
+        sessionName = account.sessionName ?? account.accountID
+        sessionDir = account.sessionDir ?? ""
+        isEditingPhone = false
+    }
+
     private func syncSelectionAfterAccountsChange() {
         if isCreatingAccount { return }
         if let selectedAccountID,
@@ -213,6 +229,7 @@ struct AccountsView: View {
 private struct AccountsTable: View {
     var accounts: [CoreAccount]
     @Binding var selection: CoreAccount.ID?
+    var activate: (CoreAccount) -> Void
     var requestDelete: (CoreAccount) -> Void
 
     var body: some View {
@@ -225,26 +242,50 @@ private struct AccountsTable: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    activate(account)
+                }
             }
             TableColumn("Auth") { account in
                 StatusBadge(text: account.authState ?? "unknown", kind: account.lastError == nil ? .neutral : .error)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        activate(account)
+                    }
             }
             TableColumn("Session") { account in
                 Text(account.sessionName ?? "")
                     .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        activate(account)
+                    }
             }
             TableColumn("Phone") { account in
                 Text(DisplayFormat.maskedPhone(account.phone))
                     .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        activate(account)
+                    }
             }
             TableColumn("Last Error") { account in
                 Text(account.lastError ?? "")
                     .foregroundStyle(.red)
                     .lineLimit(2)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        activate(account)
+                    }
             }
             TableColumn("Updated") { account in
                 Text(DisplayFormat.shortDateTime(account.authUpdatedAt ?? account.updatedAt))
                     .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        activate(account)
+                    }
             }
             TableColumn("Delete") { account in
                 Button(role: .destructive) {

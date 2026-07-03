@@ -42,3 +42,7 @@ Core API mapping is tracked in
 This repository currently contains the project direction and architecture
 decision docs. The next implementation step is to scaffold the macOS app
 targets and wire a typed HTTP client against the core API.
+
+## License
+
+Apache License 2.0. See [`LICENSE`](LICENSE).

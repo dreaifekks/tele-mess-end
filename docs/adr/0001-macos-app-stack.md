@@ -98,6 +98,21 @@ TeleMessEnd/
     Log.swift
 ```
 
+The scaffold should also include the project-local run contract recommended for
+Codex macOS workflows:
+
+```text
+script/
+  build_and_run.sh
+.codex/
+  environments/
+    environment.toml
+```
+
+`script/build_and_run.sh` should own the normal kill, build, and launch loop for
+the Mac app. `.codex/environments/environment.toml` should point the Codex app
+Run action at that script. Keep both files outside app source.
+
 ## UI Model
 
 Use a desktop-first main window:

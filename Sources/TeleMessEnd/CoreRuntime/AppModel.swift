@@ -57,7 +57,7 @@ final class AppModel {
     var originTypeFilter = ""
     var originTagFilter = ""
     var originBackupFilter: OriginBackupFilter = .any
-    var originSort: OriginSort = .lastMessageDesc
+    var originSort: OriginSort = .groupTopic
     var includeArchivedOrigins = false
     var selectedOriginID: CoreOrigin.ID?
 
@@ -409,6 +409,8 @@ final class AppModel {
     private func sortOrigins(_ origins: [CoreOrigin]) -> [CoreOrigin] {
         origins.sorted { lhs, rhs in
             switch originSort {
+            case .groupTopic:
+                return compareOriginHierarchy(lhs, rhs)
             case .lastMessageDesc:
                 return (lhs.lastMessageAt ?? "") > (rhs.lastMessageAt ?? "")
             case .lastMessageAsc:
@@ -434,6 +436,21 @@ final class AppModel {
                 return left && !right
             }
         }
+    }
+
+    private func compareOriginHierarchy(_ lhs: CoreOrigin, _ rhs: CoreOrigin) -> Bool {
+        if lhs.accountID != rhs.accountID {
+            return lhs.accountID.localizedCaseInsensitiveCompare(rhs.accountID) == .orderedAscending
+        }
+        if lhs.originID != rhs.originID {
+            return lhs.originID < rhs.originID
+        }
+        if lhs.topicID != rhs.topicID {
+            if lhs.topicID == 0 { return true }
+            if rhs.topicID == 0 { return false }
+            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+        }
+        return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
     }
 }
 

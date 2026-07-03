@@ -149,6 +149,11 @@ private struct AccountsTable: View {
                 Text(account.sessionName ?? "")
                     .lineLimit(1)
             }
+            TableColumn("Last Error") { account in
+                Text(account.lastError ?? "")
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
             TableColumn("Updated") { account in
                 Text(DisplayFormat.shortDateTime(account.authUpdatedAt ?? account.updatedAt))
                     .foregroundStyle(.secondary)

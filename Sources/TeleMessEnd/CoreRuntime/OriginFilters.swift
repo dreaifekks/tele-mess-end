@@ -23,6 +23,7 @@ enum OriginBackupFilter: String, CaseIterable, Identifiable {
 }
 
 enum OriginSort: String, CaseIterable, Identifiable {
+    case groupTopic
     case lastMessageDesc
     case lastMessageAsc
     case titleAsc
@@ -34,6 +35,8 @@ enum OriginSort: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .groupTopic:
+            "Group/topic"
         case .lastMessageDesc:
             "Last message desc"
         case .lastMessageAsc:

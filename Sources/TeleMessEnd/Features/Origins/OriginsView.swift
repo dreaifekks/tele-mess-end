@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -67,7 +68,7 @@ struct OriginsView: View {
             mainContent
 
             if !inspectorOrigins.isEmpty {
-                OriginInspectorView(model: model, selectedOrigins: inspectorOrigins)
+                OriginInspectorView(model: model, selectedOrigins: inspectorOrigins, isOverlayPanel: true)
                     .frame(width: compactInspectorWidth(containerWidth: containerWidth))
                     .frame(maxHeight: .infinity)
                     .overlay(alignment: .leading) {
@@ -389,6 +390,7 @@ private struct OriginGroup {
 private struct OriginInspectorView: View {
     @Bindable var model: AppModel
     var selectedOrigins: [CoreOrigin]
+    var isOverlayPanel = false
     @State private var enabled = false
     @State private var captureText = true
     @State private var captureMediaMetadata = true
@@ -410,7 +412,13 @@ private struct OriginInspectorView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .scrollIndicators(.automatic)
-        .background(.regularMaterial)
+        .background {
+            if isOverlayPanel {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                Rectangle().fill(.regularMaterial)
+            }
+        }
         .onChange(of: model.selectedOriginID) {
             syncPolicy()
         }

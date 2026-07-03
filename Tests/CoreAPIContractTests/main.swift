@@ -4,6 +4,7 @@ import Foundation
 enum CoreAPIContractTests {
     static func main() async {
         var runner = ContractRunner()
+        await runner.run("health decodes state") { try await testHealthDecodesState() }
         await runner.run("state uses bearer token") { try await testStateUsesBearerToken() }
         await runner.run("capabilities uses api token") { try await testCapabilitiesUsesAPIToken() }
         await runner.run("messages and search decode") { try await testMessagesAndSearchDecode() }
@@ -12,6 +13,30 @@ enum CoreAPIContractTests {
         await runner.run("diagnostics endpoints") { try await testDiagnosticsEndpoints() }
         await runner.run("http errors map detail") { try await testHTTPErrorMapping() }
         runner.finish()
+    }
+
+    static func testHealthDecodesState() async throws {
+        let client = makeClient(
+            expectedPath: "/healthz",
+            responseJSON:
+            """
+            {
+              "ok": true,
+              "database_id": "db",
+              "schema_version": "2",
+              "last_event_seq": 12,
+              "message_count": 34,
+              "operation_error_count": 0,
+              "server_time": "2026-07-03T00:00:00+00:00"
+            }
+            """
+        )
+
+        let state = try await client.health()
+
+        try expectEqual(state.ok, true)
+        try expectEqual(state.databaseID, "db")
+        try expectEqual(state.schemaVersion, "2")
     }
 
     static func testStateUsesBearerToken() async throws {

@@ -149,6 +149,10 @@ private struct AccountsTable: View {
                 Text(account.sessionName ?? "")
                     .lineLimit(1)
             }
+            TableColumn("Phone") { account in
+                Text(account.phone ?? "")
+                    .lineLimit(1)
+            }
             TableColumn("Last Error") { account in
                 Text(account.lastError ?? "")
                     .foregroundStyle(.red)

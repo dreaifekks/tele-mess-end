@@ -47,6 +47,18 @@ struct MessageTable: View {
                         .lineLimit(3)
                 }
             }
+
+            TableColumn("Link") { message in
+                if let permalink = message.permalink,
+                   let url = URL(string: permalink) {
+                    Link(destination: url) {
+                        Image(systemName: "arrow.up.right.square")
+                    }
+                } else {
+                    Text("")
+                }
+            }
+            .width(min: 48, ideal: 56, max: 64)
         }
     }
 }

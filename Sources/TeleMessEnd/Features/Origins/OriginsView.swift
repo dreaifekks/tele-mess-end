@@ -72,7 +72,11 @@ struct OriginsView: View {
                     .frame(width: compactInspectorWidth(containerWidth: containerWidth))
                     .frame(maxHeight: .infinity)
                     .overlay(alignment: .leading) {
-                        Divider()
+                        Rectangle()
+                            .fill(Color(nsColor: .separatorColor))
+                            .frame(width: 1)
+                            .frame(maxHeight: .infinity)
+                            .allowsHitTesting(false)
                     }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                     .zIndex(2)
@@ -463,6 +467,8 @@ private struct OriginInspectorView: View {
                 GridRow { Text("Archived").foregroundStyle(.secondary); Text(origin.isArchived ? "Yes" : "No") }
             }
             .font(.callout)
+
+            Divider()
 
             Toggle("Enabled", isOn: $enabled)
             Toggle("Capture text", isOn: $captureText)

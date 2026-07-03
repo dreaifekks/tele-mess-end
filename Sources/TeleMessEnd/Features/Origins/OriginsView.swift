@@ -456,8 +456,6 @@ private struct OriginInspectorView: View {
             }
             .font(.callout)
 
-            Divider()
-
             Toggle("Enabled", isOn: $enabled)
             Toggle("Capture text", isOn: $captureText)
             Toggle("Capture media metadata", isOn: $captureMediaMetadata)

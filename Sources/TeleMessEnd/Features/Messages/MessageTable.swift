@@ -49,11 +49,11 @@ struct MessageTable: View {
             }
 
             TableColumn("Link") { message in
-                if let permalink = message.permalink,
-                   let url = URL(string: permalink) {
+                if let url = message.telegramDeepLink {
                     Link(destination: url) {
                         Image(systemName: "arrow.up.right.square")
                     }
+                    .help("Open in Telegram")
                 } else {
                     Text("")
                 }

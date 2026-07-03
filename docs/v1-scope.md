@@ -86,9 +86,12 @@ Give one operator a reliable Mac app to:
 - Type filter.
 - Backup on/off filter.
 - Include archived toggle.
-- Sort by title, type, last message, account, and backup state.
+- Include archived toggle refreshes the loaded origin list immediately.
+- Sort by title, type, last message, account, and backup state, with Backup
+  First available as a pinned priority.
 - Group/topic presentation where `topic_id = 0` is the group row and topics are
-  child rows under the same `origin_id`.
+  child rows under the same `origin_id`; topic rows are collapsed by default.
+- Manage mode for multi-select archive/restore/delete operations.
 - Discover origins action using `POST /manage/discover-origins`.
 - Archive/unarchive action using `PATCH /manage/origins/archive`.
 - Careful delete action using `DELETE /manage/origins`.
@@ -105,7 +108,8 @@ Give one operator a reliable Mac app to:
 - Recent messages list in Dashboard.
 - Search page backed by `/sync/search`.
 - Display account, chat title, sender, sent time, text, deleted state, media
-  marker, and permalink when present.
+  marker, and Telegram app deeplink when possible.
+- Display core timestamps in the Mac user's current time zone.
 - No local message database in V1.
 
 ### Diagnostics

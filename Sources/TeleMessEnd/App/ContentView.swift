@@ -130,7 +130,7 @@ private struct ToolbarPillLabel: View {
         }
         .font(.callout.weight(.medium))
         .padding(.horizontal, 14)
-        .frame(minWidth: 150, maxWidth: 210, minHeight: 30)
+        .frame(minWidth: 180, maxWidth: 260, minHeight: 30)
         .background(.quaternary.opacity(0.55), in: Capsule())
         .contentShape(Capsule())
     }

@@ -58,6 +58,7 @@ final class AppModel {
     var originTagFilter = ""
     var originBackupFilter: OriginBackupFilter = .any
     var originSort: OriginSort = .groupTopic
+    var originBackupFirst = true
     var includeArchivedOrigins = false
     var selectedOriginID: CoreOrigin.ID?
 
@@ -80,8 +81,8 @@ final class AppModel {
         return origins.first { $0.id == selectedOriginID }
     }
 
-    var filteredOrigins: [CoreOrigin] {
-        let filtered = origins.filter { origin in
+    var matchingOrigins: [CoreOrigin] {
+        origins.filter { origin in
             if !originAccountFilter.isEmpty && !origin.accountID.localizedCaseInsensitiveContains(originAccountFilter) {
                 return false
             }
@@ -117,6 +118,10 @@ final class AppModel {
             }
             return true
         }
+    }
+
+    var filteredOrigins: [CoreOrigin] {
+        let filtered = matchingOrigins
         return sortOrigins(filtered)
     }
 
@@ -227,16 +232,25 @@ final class AppModel {
 
     func archiveSelectedOrigin(_ archived: Bool) async {
         guard let origin = selectedOrigin else { return }
+        await archiveOrigins([origin], archived: archived)
+    }
+
+    func archiveOrigins(_ selectedOrigins: [CoreOrigin], archived: Bool) async {
+        let targets = affectedOrigins(for: selectedOrigins)
+        guard !targets.isEmpty else { return }
         await withLoading(archived ? "Archiving origin" : "Restoring origin") {
-            _ = try await makeClient().archiveOrigin(
-                ArchiveOriginRequest(
-                    accountID: origin.accountID,
-                    originID: origin.originID,
-                    topicID: origin.topicID,
-                    archived: archived,
-                    source: origin.source
+            let client = try makeClient()
+            for origin in targets {
+                _ = try await client.archiveOrigin(
+                    ArchiveOriginRequest(
+                        accountID: origin.accountID,
+                        originID: origin.originID,
+                        topicID: origin.topicID,
+                        archived: archived,
+                        source: origin.source
+                    )
                 )
-            )
+            }
             origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
             statusMessage = archived ? "Origin archived" : "Origin restored"
         }
@@ -244,15 +258,24 @@ final class AppModel {
 
     func deleteSelectedOrigin() async {
         guard let origin = selectedOrigin else { return }
+        await deleteOrigins([origin])
+    }
+
+    func deleteOrigins(_ selectedOrigins: [CoreOrigin]) async {
+        let targets = affectedOrigins(for: selectedOrigins)
+        guard !targets.isEmpty else { return }
         await withLoading("Deleting origin") {
-            _ = try await makeClient().deleteOrigin(
-                DeleteOriginRequest(
-                    accountID: origin.accountID,
-                    originID: origin.originID,
-                    topicID: origin.topicID,
-                    source: origin.source
+            let client = try makeClient()
+            for origin in targets {
+                _ = try await client.deleteOrigin(
+                    DeleteOriginRequest(
+                        accountID: origin.accountID,
+                        originID: origin.originID,
+                        topicID: origin.topicID,
+                        source: origin.source
+                    )
                 )
-            )
+            }
             origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
             selectedOriginID = origins.first?.id
             statusMessage = "Origin deleted"
@@ -260,20 +283,24 @@ final class AppModel {
     }
 
     func savePolicy(for origin: CoreOrigin, policy: CoreBackupPolicy) async {
+        let targets = affectedOrigins(for: [origin])
         await withLoading("Saving policy") {
-            _ = try await makeClient().setBackupPolicy(
-                BackupPolicyRequest(
-                    accountID: origin.accountID,
-                    originID: origin.originID,
-                    topicID: origin.topicID,
-                    enabled: policy.enabled,
-                    captureText: policy.captureText,
-                    captureMediaMetadata: policy.captureMediaMetadata,
-                    downloadMedia: policy.downloadMedia,
-                    tags: policy.tags,
-                    source: origin.source
+            let client = try makeClient()
+            for target in targets {
+                _ = try await client.setBackupPolicy(
+                    BackupPolicyRequest(
+                        accountID: target.accountID,
+                        originID: target.originID,
+                        topicID: target.topicID,
+                        enabled: policy.enabled,
+                        captureText: policy.captureText,
+                        captureMediaMetadata: policy.captureMediaMetadata,
+                        downloadMedia: policy.downloadMedia,
+                        tags: policy.tags,
+                        source: target.source
+                    )
                 )
-            )
+            }
             origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
             statusMessage = "Policy saved"
         }
@@ -408,6 +435,13 @@ final class AppModel {
 
     private func sortOrigins(_ origins: [CoreOrigin]) -> [CoreOrigin] {
         origins.sorted { lhs, rhs in
+            if originBackupFirst {
+                let left = lhs.backupPolicy?.enabled == true
+                let right = rhs.backupPolicy?.enabled == true
+                if left != right {
+                    return left && !right
+                }
+            }
             switch originSort {
             case .groupTopic:
                 return compareOriginHierarchy(lhs, rhs)
@@ -451,6 +485,27 @@ final class AppModel {
             return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
         }
         return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+    }
+
+    private func affectedOrigins(for selectedOrigins: [CoreOrigin]) -> [CoreOrigin] {
+        var seen = Set<CoreOrigin.ID>()
+        var targets: [CoreOrigin] = []
+        for origin in selectedOrigins {
+            let affected: [CoreOrigin]
+            if origin.topicID == 0 {
+                affected = origins.filter {
+                    $0.source == origin.source &&
+                    $0.accountID == origin.accountID &&
+                    $0.originID == origin.originID
+                }
+            } else {
+                affected = [origin]
+            }
+            for target in affected where seen.insert(target.id).inserted {
+                targets.append(target)
+            }
+        }
+        return targets
     }
 }
 

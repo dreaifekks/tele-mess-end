@@ -2,6 +2,9 @@ import SwiftUI
 
 struct AccountsView: View {
     @Bindable var model: AppModel
+    @State private var selectedAccountID: CoreAccount.ID?
+    @State private var isCreatingAccount = false
+    @State private var isEditingPhone = false
     @State private var accountID = ""
     @State private var displayName = ""
     @State private var phone = ""
@@ -31,13 +34,7 @@ struct AccountsView: View {
                 if model.accounts.isEmpty {
                     EmptyStateView(title: "No accounts", detail: "Create account metadata, then request a Telegram login code.", systemImage: "person.badge.plus")
                 } else {
-                    AccountsTable(accounts: model.accounts, select: { account in
-                        accountID = account.accountID
-                        displayName = account.displayName ?? ""
-                        phone = account.phone ?? ""
-                        sessionName = account.sessionName ?? account.accountID
-                        sessionDir = account.sessionDir ?? ""
-                    }, requestDelete: { account in
+                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, requestDelete: { account in
                         pendingDeleteAccount = account
                     })
                 }
@@ -49,6 +46,13 @@ struct AccountsView: View {
             if model.accounts.isEmpty {
                 await model.loadAccounts()
             }
+            syncSelectionAfterAccountsChange()
+        }
+        .onChange(of: selectedAccountID) {
+            loadSelectedAccount()
+        }
+        .onChange(of: model.accounts) {
+            syncSelectionAfterAccountsChange()
         }
         .alert("Delete account metadata?", isPresented: Binding(
             get: { pendingDeleteAccount != nil },
@@ -60,7 +64,10 @@ struct AccountsView: View {
         )) {
             Button("Delete", role: .destructive) {
                 if let account = pendingDeleteAccount {
-                    Task { await model.deleteAccount(account) }
+                    Task {
+                        await model.deleteAccount(account)
+                        syncSelectionAfterAccountsChange()
+                    }
                 }
                 pendingDeleteAccount = nil
             }
@@ -74,14 +81,52 @@ struct AccountsView: View {
 
     private var accountForm: some View {
         Form {
+            Section {
+                HStack {
+                    Picker("Account", selection: $selectedAccountID) {
+                        ForEach(model.accounts) { account in
+                            Text(account.title).tag(Optional(account.id))
+                        }
+                    }
+                    .disabled(model.accounts.isEmpty)
+                    Spacer()
+                    Button {
+                        beginCreatingAccount()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("Add account")
+                }
+            }
+
             Section("Account") {
-                TextField("Account ID", text: $accountID)
+                if isCreatingAccount {
+                    TextField("Account ID", text: $accountID)
+                } else {
+                    LabeledContent("Account ID") {
+                        Text(accountID.isEmpty ? "-" : accountID)
+                            .textSelection(.enabled)
+                    }
+                }
                 TextField("Display name", text: $displayName)
-                TextField("Phone", text: $phone)
+                if isCreatingAccount || isEditingPhone || phone.isEmpty {
+                    TextField("Phone", text: $phone)
+                } else {
+                    LabeledContent("Phone") {
+                        HStack {
+                            Text(DisplayFormat.maskedPhone(phone))
+                            Button("Edit") {
+                                isEditingPhone = true
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
                 TextField("Session name", text: $sessionName)
                 TextField("Session directory", text: $sessionDir)
                 Button {
                     Task {
+                        let savedAccountID = accountID
                         await model.createAccount(
                             CreateAccountRequest(
                                 accountID: accountID,
@@ -91,9 +136,12 @@ struct AccountsView: View {
                                 sessionDir: sessionDir.nilIfEmpty
                             )
                         )
+                        selectedAccountID = model.accounts.first { $0.accountID == savedAccountID }?.id
+                        isCreatingAccount = false
+                        isEditingPhone = false
                     }
                 } label: {
-                    Label("Save Account", systemImage: "square.and.arrow.down")
+                    Label(isCreatingAccount ? "Add Account" : "Save Account", systemImage: "square.and.arrow.down")
                 }
                 .disabled(accountID.isEmpty)
             }
@@ -124,15 +172,51 @@ struct AccountsView: View {
         .formStyle(.grouped)
         .padding(20)
     }
+
+    private func beginCreatingAccount() {
+        selectedAccountID = nil
+        isCreatingAccount = true
+        isEditingPhone = true
+        accountID = ""
+        displayName = ""
+        phone = ""
+        sessionName = ""
+        sessionDir = ""
+    }
+
+    private func loadSelectedAccount() {
+        guard !isCreatingAccount,
+              let selectedAccountID,
+              let account = model.accounts.first(where: { $0.id == selectedAccountID }) else {
+            return
+        }
+        accountID = account.accountID
+        displayName = account.displayName ?? ""
+        phone = account.phone ?? ""
+        sessionName = account.sessionName ?? account.accountID
+        sessionDir = account.sessionDir ?? ""
+        isEditingPhone = false
+    }
+
+    private func syncSelectionAfterAccountsChange() {
+        if isCreatingAccount { return }
+        if let selectedAccountID,
+           model.accounts.contains(where: { $0.id == selectedAccountID }) {
+            loadSelectedAccount()
+            return
+        }
+        selectedAccountID = model.accounts.first?.id
+        loadSelectedAccount()
+    }
 }
 
 private struct AccountsTable: View {
     var accounts: [CoreAccount]
-    var select: (CoreAccount) -> Void
+    @Binding var selection: CoreAccount.ID?
     var requestDelete: (CoreAccount) -> Void
 
     var body: some View {
-        Table(accounts) {
+        Table(accounts, selection: $selection) {
             TableColumn("Account") { account in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(account.title)
@@ -150,7 +234,7 @@ private struct AccountsTable: View {
                     .lineLimit(1)
             }
             TableColumn("Phone") { account in
-                Text(account.phone ?? "")
+                Text(DisplayFormat.maskedPhone(account.phone))
                     .lineLimit(1)
             }
             TableColumn("Last Error") { account in
@@ -162,19 +246,16 @@ private struct AccountsTable: View {
                 Text(DisplayFormat.shortDateTime(account.authUpdatedAt ?? account.updatedAt))
                     .foregroundStyle(.secondary)
             }
-            TableColumn("Actions") { account in
-                HStack {
-                    Button("Use") {
-                        select(account)
-                    }
-                    Button(role: .destructive) {
-                        requestDelete(account)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
+            TableColumn("Delete") { account in
+                Button(role: .destructive) {
+                    requestDelete(account)
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.red)
                 }
+                .buttonStyle(.borderless)
             }
+            .width(min: 54, ideal: 64, max: 72)
         }
     }
 }

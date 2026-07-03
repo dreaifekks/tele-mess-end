@@ -41,9 +41,9 @@ participants, cursors, and media metadata through the typed Swift client.
 | Typed API client | Complete | `CoreAPIClient` uses `URLSession`, async/await, typed models, centralized auth, and HTTP error mapping. |
 | Mocked transport tests | Complete | `Tests/CoreAPIContractTests/main.swift` and `script/test_core_api.sh` cover V1 endpoint families and HTTP errors without XCTest dependency. |
 | Dashboard | Complete | `DashboardView` shows state cards, recent 100 messages, failed operation events, active profile, refresh, and console action. |
-| Accounts | Complete | `AccountsView` lists accounts, creates account metadata, runs status/request-code/submit-code with 2FA password, confirms deletion, and displays auth/session/phone/last error. |
-| Origins and policies | Complete | `OriginsView` lists origins, filters by account/search/type/backup/tag/archive, sorts by required modes, presents group/topic rows, discovers origins, archives/restores/deletes with confirmation, and edits policy/tag fields. |
-| Messages and search | Complete | `MessagesView` and `MessageTable` load recent messages, search `/sync/search`, and display account/chat/sender/time/text/deleted/media/permalink. |
+| Accounts | Complete | `AccountsView` lists accounts, selects accounts from the account picker, creates account metadata, masks phone display, runs status/request-code/submit-code with 2FA password, confirms deletion, and displays auth/session/last error. |
+| Origins and policies | Complete | `OriginsView` lists origins, filters by account/search/type/backup/tag/archive, supports backup-first and column sorting, collapses topics by default, manages multi-select operations, discovers origins, archives/restores/deletes with confirmation, and edits policy/tag fields. |
+| Messages and search | Complete | `MessagesView` and `MessageTable` load recent messages, search `/sync/search`, and display account/chat/sender/local-time/text/deleted/media/Telegram deeplink. |
 | Diagnostics | Complete | `DiagnosticsView` covers operation events, participants, cursors, media files, participant refresh, filters, and raw payload detail panel. |
 | Local core runner | Complete | `SettingsView` local runtime section starts/stops configured local command and displays status, output, and process errors. |
 

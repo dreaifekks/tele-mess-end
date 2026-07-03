@@ -204,6 +204,9 @@ struct CoreOrigin: Decodable, Identifiable, Hashable {
     var displayTitle: String { title?.isEmpty == false ? title! : "\(originID)" }
     var isArchived: Bool { archivedAt != nil }
     var isTopic: Bool { topicID != 0 }
+    var backupSortValue: String { backupPolicy?.enabled == true ? "0" : "1" }
+    var tagsSortValue: String { backupPolicy?.tags ?? "" }
+    var lastMessageSortValue: String { lastMessageAt ?? "" }
 
     private enum CodingKeys: String, CodingKey {
         case source
@@ -340,6 +343,23 @@ struct CoreMessage: Decodable, Identifiable, Hashable {
     var isDeleted: Bool { deletedAt != nil }
     var displayChat: String { chatTitle?.isEmpty == false ? chatTitle! : "\(chatID)" }
     var displaySender: String { senderName?.isEmpty == false ? senderName! : senderUsername ?? "" }
+    var telegramDeepLink: URL? {
+        if let permalink,
+           let url = URL(string: permalink),
+           url.host?.localizedCaseInsensitiveContains("t.me") == true {
+            let components = url.pathComponents.filter { $0 != "/" }
+            if components.first == "c", components.count >= 3 {
+                return URL(string: "tg://privatepost?channel=\(components[1])&post=\(components[2])")
+            }
+            if components.count >= 2 {
+                return URL(string: "tg://resolve?domain=\(components[0])&post=\(components[1])")
+            }
+        }
+
+        let absoluteChatID = String(abs(chatID))
+        let channelID = absoluteChatID.hasPrefix("100") ? String(absoluteChatID.dropFirst(3)) : absoluteChatID
+        return URL(string: "tg://privatepost?channel=\(channelID)&post=\(messageID)")
+    }
 
     private enum CodingKeys: String, CodingKey {
         case eventSeq = "event_seq"

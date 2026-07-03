@@ -65,6 +65,16 @@ Run Core API contract tests without XCTest:
 These tests compile the typed Core API client with mocked transport fixtures and
 real snake_case response payloads from the core API surface.
 
+Run a read-only live smoke against a running core:
+
+```bash
+CORE_BASE_URL=http://127.0.0.1:8765 CORE_API_TOKEN=your-token ./script/smoke_core_api_live.sh
+```
+
+This compiles the same typed client and checks `/healthz`, `/sync/state`,
+`/manage/capabilities`, accounts, origins, recent messages, operation events,
+participants, cursors, and media metadata.
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE).

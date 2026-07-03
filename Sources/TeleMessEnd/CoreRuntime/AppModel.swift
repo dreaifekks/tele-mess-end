@@ -262,24 +262,7 @@ final class AppModel {
     }
 
     func deleteOrigins(_ selectedOrigins: [CoreOrigin]) async {
-        let targets = affectedOrigins(for: selectedOrigins)
-        guard !targets.isEmpty else { return }
-        await withLoading("Deleting origin") {
-            let client = try makeClient()
-            for origin in targets {
-                _ = try await client.deleteOrigin(
-                    DeleteOriginRequest(
-                        accountID: origin.accountID,
-                        originID: origin.originID,
-                        topicID: origin.topicID,
-                        source: origin.source
-                    )
-                )
-            }
-            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
-            selectedOriginID = origins.first?.id
-            statusMessage = "Origin deleted"
-        }
+        await archiveOrigins(selectedOrigins, archived: true)
     }
 
     func savePolicy(for origin: CoreOrigin, policy: CoreBackupPolicy) async {

@@ -91,10 +91,11 @@ Give one operator a reliable Mac app to:
   First available as a pinned priority.
 - Group/topic presentation where `topic_id = 0` is the group row and topics are
   child rows under the same `origin_id`; topic rows are collapsed by default.
-- Manage mode for multi-select archive/restore/delete operations.
+- Manage mode for multi-select archive/restore operations.
 - Discover origins action using `POST /manage/discover-origins`.
 - Archive/unarchive action using `PATCH /manage/origins/archive`.
-- Careful delete action using `DELETE /manage/origins`.
+- Origin removal in the Mac UI is archive-only; do not expose hard delete for
+  origin metadata in V1.
 - Single-origin backup policy editor:
   - enabled
   - capture text

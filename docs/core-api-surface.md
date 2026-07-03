@@ -309,7 +309,8 @@ Mac V1:
 - Include filters for account, type, backup status, tags, archived state, and
   search text.
 - Support discovery from Telegram sessions.
-- Support archive/unarchive and careful delete.
+- Support archive/unarchive. The Mac V1 UI treats origin removal as
+  archive-only and does not expose hard delete for origin metadata.
 - Render topic rows under their group/channel row without treating topics as
   separate parents.
 
@@ -448,7 +449,8 @@ Initial methods:
 - `listOrigins(accountID:includeArchived:)`
 - `discoverOrigins(accountID:includeTopics:includePrivate:topicLimit:)`
 - `archiveOrigin(...)`
-- `deleteOrigin(...)`
+- `deleteOrigin(...)` exists in the client for API coverage, but Mac V1 origin
+  removal uses archive semantics in the UI.
 - `listBackupPolicies(accountID:)`
 - `setBackupPolicy(...)`
 - `deleteBackupPolicy(...)`

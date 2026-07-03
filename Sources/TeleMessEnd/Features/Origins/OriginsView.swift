@@ -326,7 +326,6 @@ private struct OriginInspectorView: View {
     @State private var captureMediaMetadata = true
     @State private var downloadMedia = false
     @State private var tags = ""
-    @State private var confirmDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -348,14 +347,6 @@ private struct OriginInspectorView: View {
             syncPolicy()
         }
         .onAppear(perform: syncPolicy)
-        .alert("Delete origin metadata?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) {
-                Task { await model.deleteOrigins(selectedOrigins) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes selected origin metadata, policy, and cursor rows through the core API. Stored messages remain unless the core changes that contract.")
-        }
     }
 
     private var bulkControls: some View {
@@ -376,11 +367,6 @@ private struct OriginInspectorView: View {
                 } label: {
                     Label("Restore", systemImage: "arrow.uturn.backward")
                 }
-            }
-            Button(role: .destructive) {
-                confirmDelete = true
-            } label: {
-                Label("Delete Origin Metadata", systemImage: "trash")
             }
         }
     }
@@ -439,12 +425,6 @@ private struct OriginInspectorView: View {
                 } label: {
                     Label(origin.isArchived ? "Restore" : "Archive", systemImage: origin.isArchived ? "arrow.uturn.backward" : "archivebox")
                 }
-            }
-
-            Button(role: .destructive) {
-                confirmDelete = true
-            } label: {
-                Label("Delete Origin Metadata", systemImage: "trash")
             }
         }
     }

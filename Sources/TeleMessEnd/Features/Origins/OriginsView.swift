@@ -396,17 +396,20 @@ private struct OriginInspectorView: View {
     @State private var tags = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if selectedOrigins.count > 1 {
-                bulkControls
-            } else if let origin = selectedOrigins.first {
-                singleOriginControls(origin)
-            } else {
-                EmptyStateView(title: "Select an origin", detail: "Pick a row to edit backup policy and archive state.", systemImage: "rectangle.stack")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if selectedOrigins.count > 1 {
+                    bulkControls
+                } else if let origin = selectedOrigins.first {
+                    singleOriginControls(origin)
+                } else {
+                    EmptyStateView(title: "Select an origin", detail: "Pick a row to edit backup policy and archive state.", systemImage: "rectangle.stack")
+                }
             }
-            Spacer()
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(20)
+        .scrollIndicators(.automatic)
         .background(.regularMaterial)
         .onChange(of: model.selectedOriginID) {
             syncPolicy()
@@ -466,6 +469,7 @@ private struct OriginInspectorView: View {
                     .foregroundStyle(.secondary)
                 TagEditor(tags: $tags)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack {
                 Button {

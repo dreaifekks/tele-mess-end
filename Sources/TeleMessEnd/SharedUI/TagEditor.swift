@@ -17,6 +17,7 @@ struct TagEditor: View {
                 ForEach(values, id: \.self) { tag in
                     HStack(spacing: 5) {
                         Text(tag)
+                            .lineLimit(1)
                         Button {
                             remove(tag)
                         } label: {
@@ -32,8 +33,9 @@ struct TagEditor: View {
                     .clipShape(Capsule())
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack {
+            HStack(spacing: 8) {
                 TextField("Add tag", text: $draft)
                     .onSubmit(addDraft)
                 Button {
@@ -41,6 +43,7 @@ struct TagEditor: View {
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
+                .fixedSize()
             }
         }
     }
@@ -65,13 +68,18 @@ struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? 320
+        guard !subviews.isEmpty else {
+            return CGSize(width: proposal.width ?? 0, height: 0)
+        }
+
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let fallbackWidth = sizes.map(\.width).reduce(0, +) + spacing * CGFloat(max(0, sizes.count - 1))
+        let maxWidth = max(1, proposal.width ?? fallbackWidth)
         var x: CGFloat = 0
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
 
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+        for size in sizes {
             if x > 0 && x + size.width > maxWidth {
                 x = 0
                 y += rowHeight + spacing
@@ -87,10 +95,11 @@ struct FlowLayout: Layout {
         var x = bounds.minX
         var y = bounds.minY
         var rowHeight: CGFloat = 0
+        let maxX = max(bounds.minX, bounds.maxX)
 
         for subview in subviews {
             let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + size.width > bounds.maxX {
+            if x > bounds.minX && x + size.width > maxX {
                 x = bounds.minX
                 y += rowHeight + spacing
                 rowHeight = 0

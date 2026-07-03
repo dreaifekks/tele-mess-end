@@ -1,0 +1,389 @@
+import AppKit
+import Foundation
+import Observation
+
+struct DashboardState {
+    var coreState: CoreState?
+    var capabilities: CoreCapabilities?
+    var recentMessages: [CoreMessage] = []
+    var operationEvents: [CoreOperationEvent] = []
+}
+
+enum DiagnosticsSection: String, CaseIterable, Identifiable {
+    case operationEvents
+    case participants
+    case cursors
+    case media
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .operationEvents:
+            "Operation Events"
+        case .participants:
+            "Participants"
+        case .cursors:
+            "Capture Cursors"
+        case .media:
+            "Media Files"
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class AppModel {
+    let profileStore: CoreProfileStore
+    let keychain = KeychainStore()
+    let localRunner = LocalCoreProcessController()
+
+    var selectedSection: AppSection = .dashboard
+    var dashboard = DashboardState()
+    var accounts: [CoreAccount] = []
+    var origins: [CoreOrigin] = []
+    var messages: [CoreMessage] = []
+    var participants: [CoreParticipant] = []
+    var cursors: [CoreCaptureCursor] = []
+    var mediaFiles: [CoreMediaFile] = []
+    var operationEvents: [CoreOperationEvent] = []
+
+    var isLoading = false
+    var statusMessage = "Ready"
+    var lastError: String?
+
+    var originSearch = ""
+    var originAccountFilter = ""
+    var originTypeFilter = ""
+    var originTagFilter = ""
+    var includeArchivedOrigins = false
+    var selectedOriginID: CoreOrigin.ID?
+
+    var messageSearchQuery = ""
+    var diagnosticsSelection: DiagnosticsSection = .operationEvents
+    var diagnosticsAccountFilter = ""
+    var diagnosticsOriginIDFilter = ""
+    var diagnosticsStatusFilter = "failed"
+
+    init(profileStore: CoreProfileStore? = nil) {
+        self.profileStore = profileStore ?? CoreProfileStore()
+    }
+
+    var selectedProfile: CoreProfile? {
+        profileStore.selectedProfile
+    }
+
+    var selectedOrigin: CoreOrigin? {
+        guard let selectedOriginID else { return nil }
+        return origins.first { $0.id == selectedOriginID }
+    }
+
+    var filteredOrigins: [CoreOrigin] {
+        origins.filter { origin in
+            if !originAccountFilter.isEmpty && !origin.accountID.localizedCaseInsensitiveContains(originAccountFilter) {
+                return false
+            }
+            if !originTypeFilter.isEmpty && origin.originType != originTypeFilter {
+                return false
+            }
+            if !originTagFilter.isEmpty {
+                let tags = origin.backupPolicy?.tags ?? ""
+                if !tags.localizedCaseInsensitiveContains(originTagFilter) {
+                    return false
+                }
+            }
+            if !originSearch.isEmpty {
+                let haystack = [
+                    origin.displayTitle,
+                    origin.username ?? "",
+                    "\(origin.originID)",
+                    "\(origin.topicID)"
+                ].joined(separator: " ")
+                if !haystack.localizedCaseInsensitiveContains(originSearch) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+
+    func refreshCurrentSection() async {
+        switch selectedSection {
+        case .dashboard:
+            await loadDashboard()
+        case .accounts:
+            await loadAccounts()
+        case .origins:
+            await loadOrigins()
+        case .messages:
+            await loadRecentMessages()
+        case .diagnostics:
+            await loadDiagnostics()
+        }
+    }
+
+    func validateActiveProfile() async {
+        await withLoading("Validating profile") {
+            let client = try makeClient()
+            dashboard.coreState = try await client.fetchSyncState()
+            dashboard.capabilities = try await client.fetchCapabilities()
+            statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
+        }
+    }
+
+    func loadDashboard() async {
+        await withLoading("Loading dashboard") {
+            let client = try makeClient()
+            async let state = client.fetchSyncState()
+            async let capabilities = client.fetchCapabilities()
+            async let messages = client.fetchRecentMessages(limit: 100)
+            async let events = client.listOperationEvents(status: "failed", limit: 100)
+            dashboard.coreState = try await state
+            dashboard.capabilities = try await capabilities
+            dashboard.recentMessages = try await messages.items
+            dashboard.operationEvents = try await events
+            statusMessage = "Dashboard refreshed"
+        }
+    }
+
+    func loadAccounts() async {
+        await withLoading("Loading accounts") {
+            accounts = try await makeClient().listManagementAccounts()
+            statusMessage = "Loaded \(accounts.count) accounts"
+        }
+    }
+
+    func createAccount(_ request: CreateAccountRequest) async {
+        await withLoading("Saving account") {
+            _ = try await makeClient().createAccount(request)
+            accounts = try await makeClient().listManagementAccounts()
+            statusMessage = "Account saved"
+        }
+    }
+
+    func deleteAccount(_ account: CoreAccount) async {
+        await withLoading("Deleting account") {
+            _ = try await makeClient().deleteAccount(accountID: account.accountID, source: account.source)
+            accounts = try await makeClient().listManagementAccounts()
+            statusMessage = "Account metadata deleted"
+        }
+    }
+
+    func authStatus(accountID: String) async {
+        await withLoading("Checking auth") {
+            let result = try await makeClient().authStatus(accountID: accountID)
+            accounts = try await makeClient().listManagementAccounts()
+            statusMessage = result.status ?? result.authState ?? "Auth status updated"
+        }
+    }
+
+    func requestCode(accountID: String, phone: String) async {
+        await withLoading("Requesting code") {
+            let result = try await makeClient().requestCode(accountID: accountID, phone: phone)
+            accounts = try await makeClient().listManagementAccounts()
+            statusMessage = result.message ?? result.status ?? "Code requested"
+        }
+    }
+
+    func submitCode(accountID: String, phone: String, code: String, password: String?) async {
+        await withLoading("Submitting code") {
+            let result = try await makeClient().submitCode(accountID: accountID, phone: phone, code: code, password: password?.nilIfEmpty)
+            accounts = try await makeClient().listManagementAccounts()
+            statusMessage = result.message ?? result.status ?? result.authState ?? "Code submitted"
+        }
+    }
+
+    func loadOrigins() async {
+        await withLoading("Loading origins") {
+            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            if selectedOriginID == nil {
+                selectedOriginID = origins.first?.id
+            }
+            statusMessage = "Loaded \(origins.count) origins"
+        }
+    }
+
+    func discoverOrigins(accountID: String) async {
+        await withLoading("Discovering origins") {
+            let result = try await makeClient().discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
+            origins = try await makeClient().listOrigins(accountID: accountID, includeArchived: includeArchivedOrigins)
+            statusMessage = result.message ?? "Discovery finished"
+        }
+    }
+
+    func archiveSelectedOrigin(_ archived: Bool) async {
+        guard let origin = selectedOrigin else { return }
+        await withLoading(archived ? "Archiving origin" : "Restoring origin") {
+            _ = try await makeClient().archiveOrigin(
+                ArchiveOriginRequest(
+                    accountID: origin.accountID,
+                    originID: origin.originID,
+                    topicID: origin.topicID,
+                    archived: archived,
+                    source: origin.source
+                )
+            )
+            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            statusMessage = archived ? "Origin archived" : "Origin restored"
+        }
+    }
+
+    func deleteSelectedOrigin() async {
+        guard let origin = selectedOrigin else { return }
+        await withLoading("Deleting origin") {
+            _ = try await makeClient().deleteOrigin(
+                DeleteOriginRequest(
+                    accountID: origin.accountID,
+                    originID: origin.originID,
+                    topicID: origin.topicID,
+                    source: origin.source
+                )
+            )
+            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            selectedOriginID = origins.first?.id
+            statusMessage = "Origin deleted"
+        }
+    }
+
+    func savePolicy(for origin: CoreOrigin, policy: CoreBackupPolicy) async {
+        await withLoading("Saving policy") {
+            _ = try await makeClient().setBackupPolicy(
+                BackupPolicyRequest(
+                    accountID: origin.accountID,
+                    originID: origin.originID,
+                    topicID: origin.topicID,
+                    enabled: policy.enabled,
+                    captureText: policy.captureText,
+                    captureMediaMetadata: policy.captureMediaMetadata,
+                    downloadMedia: policy.downloadMedia,
+                    tags: policy.tags,
+                    source: origin.source
+                )
+            )
+            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            statusMessage = "Policy saved"
+        }
+    }
+
+    func loadRecentMessages() async {
+        await withLoading("Loading messages") {
+            messages = try await makeClient().fetchRecentMessages(limit: 100).items
+            statusMessage = "Loaded recent messages"
+        }
+    }
+
+    func searchMessages() async {
+        let query = messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            await loadRecentMessages()
+            return
+        }
+        await withLoading("Searching messages") {
+            messages = try await makeClient().searchMessages(query: query, limit: 100)
+            statusMessage = "Search returned \(messages.count) messages"
+        }
+    }
+
+    func loadDiagnostics() async {
+        await withLoading("Loading diagnostics") {
+            let client = try makeClient()
+            switch diagnosticsSelection {
+            case .operationEvents:
+                operationEvents = try await client.listOperationEvents(
+                    accountID: diagnosticsAccountFilter.nilIfEmpty,
+                    status: diagnosticsStatusFilter.nilIfEmpty,
+                    limit: 100
+                )
+            case .participants:
+                participants = try await client.listParticipants(
+                    accountID: diagnosticsAccountFilter.nilIfEmpty,
+                    originID: Int(diagnosticsOriginIDFilter)
+                )
+            case .cursors:
+                cursors = try await client.listCaptureCursors(accountID: diagnosticsAccountFilter.nilIfEmpty)
+            case .media:
+                mediaFiles = try await client.listMediaFiles(accountID: diagnosticsAccountFilter.nilIfEmpty, limit: 500)
+            }
+            statusMessage = "Diagnostics loaded"
+        }
+    }
+
+    func refreshParticipants(accountID: String, originID: Int) async {
+        await withLoading("Refreshing participants") {
+            _ = try await makeClient().refreshParticipants(accountID: accountID, originID: originID, limit: 500)
+            participants = try await makeClient().listParticipants(accountID: accountID, originID: originID)
+            diagnosticsSelection = .participants
+            statusMessage = "Participants refreshed"
+        }
+    }
+
+    func saveProfile(_ profile: CoreProfile, token: String?) {
+        profileStore.upsert(profile)
+        do {
+            if let token {
+                if token.isEmpty {
+                    try keychain.deleteToken(profileID: profile.id)
+                } else {
+                    try keychain.saveToken(token, profileID: profile.id)
+                }
+            }
+            statusMessage = "Profile saved"
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func tokenForSelectedProfile() -> String {
+        guard let selectedProfile else { return "" }
+        return (try? keychain.readToken(profileID: selectedProfile.id)) ?? ""
+    }
+
+    func openConsole() {
+        guard let url = selectedProfile?.baseURL?.appendingPathComponent("console") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func startLocalCore() {
+        guard let profile = selectedProfile else { return }
+        localRunner.start(profile: profile)
+    }
+
+    func stopLocalCore() {
+        localRunner.stop()
+    }
+
+    private func makeClient() throws -> CoreAPIClient {
+        guard let profile = selectedProfile else {
+            throw CoreAPIError.missingProfile
+        }
+        guard let baseURL = profile.baseURL else {
+            throw CoreAPIError.invalidBaseURL(profile.baseURLString)
+        }
+        return CoreAPIClient(
+            baseURL: baseURL,
+            tokenProvider: KeychainTokenProvider(keychain: keychain, profileID: profile.id),
+            authMode: profile.authMode
+        )
+    }
+
+    private func withLoading(_ action: String, operation: () async throws -> Void) async {
+        isLoading = true
+        lastError = nil
+        statusMessage = action
+        do {
+            try await operation()
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "Failed"
+        }
+        isLoading = false
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}

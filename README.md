@@ -46,9 +46,15 @@ V1 implementation scope is tracked in [`docs/v1-scope.md`](docs/v1-scope.md).
 
 ## Repository Status
 
-This repository currently contains the project direction and architecture
-decision docs. The next implementation step is to scaffold the macOS app
-targets and wire a typed HTTP client against the core API.
+This repository now contains the SwiftPM macOS app scaffold, typed core API
+client, core profile/token foundation, first-pass V1 feature views, and the
+project-local Codex Run action.
+
+Run locally:
+
+```bash
+./script/build_and_run.sh
+```
 
 ## License
 

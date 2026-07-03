@@ -5,15 +5,19 @@ struct SettingsView: View {
     @State private var draft = CoreProfile.defaultLocal
     @State private var token = ""
     @State private var confirmDeleteProfile = false
+    @AppStorage(AppPreferenceKeys.defaultWindowWidth) private var defaultWindowWidth = AppLayoutDefaults.windowWidth
+    @AppStorage(AppPreferenceKeys.defaultWindowHeight) private var defaultWindowHeight = AppLayoutDefaults.windowHeight
+    @AppStorage(AppPreferenceKeys.sidebarWidth) private var sidebarWidth = AppLayoutDefaults.sidebarWidth
+    @AppStorage(AppPreferenceKeys.diagnosticsDetailWidth) private var diagnosticsDetailWidth = AppLayoutDefaults.diagnosticsDetailWidth
 
     var body: some View {
         TabView {
-            profileSettings
-                .tabItem { Label("Profiles", systemImage: "server.rack") }
-            localRuntime
-                .tabItem { Label("Local Core", systemImage: "terminal") }
+            coreSettings
+                .tabItem { Label("Core", systemImage: "server.rack") }
+            layoutSettings
+                .tabItem { Label("Layout", systemImage: "rectangle.split.3x1") }
         }
-        .frame(width: 620, height: 460)
+        .frame(width: 720, height: 560)
         .scenePadding()
         .onAppear(perform: loadDraft)
         .onChange(of: model.profileStore.selectedProfileID) {
@@ -30,7 +34,7 @@ struct SettingsView: View {
         }
     }
 
-    private var profileSettings: some View {
+    private var coreSettings: some View {
         HSplitView {
             List(selection: Binding<UUID?>(
                 get: { model.profileStore.selectedProfileID },
@@ -49,13 +53,14 @@ struct SettingsView: View {
             .frame(minWidth: 170, idealWidth: 200)
 
             Form {
-                Section("Profile") {
+                Section("Core") {
                     TextField("Name", text: $draft.name)
-                    Picker("Kind", selection: $draft.kind) {
+                    Picker("Mode", selection: $draft.kind) {
                         ForEach(CoreProfileKind.allCases) { kind in
                             Text(kind.title).tag(kind)
                         }
                     }
+                    .pickerStyle(.segmented)
                     TextField("Base URL", text: $draft.baseURLString)
                     Picker("Auth", selection: $draft.authMode) {
                         ForEach(CoreAuthMode.allCases) { mode in
@@ -66,23 +71,53 @@ struct SettingsView: View {
                 }
 
                 if draft.kind == .local {
-                    Section("Local Command") {
+                    Section("Local Runtime") {
                         TextField("Command", text: $draft.localCommand)
                         TextField("Working directory", text: $draft.localWorkingDirectory)
+                        HStack {
+                            Button {
+                                saveDraft()
+                                model.startLocalCore()
+                            } label: {
+                                Label("Start", systemImage: "play")
+                            }
+                            Button {
+                                model.stopLocalCore()
+                            } label: {
+                                Label("Stop", systemImage: "stop")
+                            }
+                            .disabled(!model.localRunner.isRunning)
+                            StatusBadge(text: model.localRunner.isRunning ? "Running" : "Stopped", kind: model.localRunner.isRunning ? .success : .neutral)
+                        }
+                        if let error = model.localRunner.lastError {
+                            Text(error)
+                                .foregroundStyle(.red)
+                        }
+                        ScrollView {
+                            Text(model.localRunner.lastOutput.isEmpty ? "No output yet." : model.localRunner.lastOutput)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .padding(8)
+                        }
+                        .frame(minHeight: 110)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
 
                 Section {
                     HStack {
                         Button {
-                            model.saveProfile(draft, token: token)
+                            saveDraft()
                         } label: {
                             Label("Save", systemImage: "checkmark")
                         }
                         Button {
+                            saveDraft()
                             Task { await model.validateActiveProfile() }
                         } label: {
-                            Label("Test", systemImage: "network")
+                            Label("Test Connection", systemImage: "network")
                         }
                         Button(role: .destructive) {
                             confirmDeleteProfile = true
@@ -111,41 +146,54 @@ struct SettingsView: View {
         }
     }
 
-    private var localRuntime: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Local Core Runner")
-                .font(.headline)
-            Text("Runs the selected local profile command. Remote profiles are managed through their HTTP endpoint only.")
-                .foregroundStyle(.secondary)
-            HStack {
-                Button {
-                    model.startLocalCore()
-                } label: {
-                    Label("Start", systemImage: "play")
+    private var layoutSettings: some View {
+        Form {
+            Section("Window") {
+                LabeledContent("Default width") {
+                    Stepper(value: $defaultWindowWidth, in: 980...1800, step: 20) {
+                        Text("\(Int(defaultWindowWidth)) px")
+                            .monospacedDigit()
+                    }
                 }
-                .disabled(model.selectedProfile?.kind != .local)
-                Button {
-                    model.stopLocalCore()
-                } label: {
-                    Label("Stop", systemImage: "stop")
+                LabeledContent("Default height") {
+                    Stepper(value: $defaultWindowHeight, in: 640...1200, step: 20) {
+                        Text("\(Int(defaultWindowHeight)) px")
+                            .monospacedDigit()
+                    }
                 }
-                .disabled(!model.localRunner.isRunning)
-                StatusBadge(text: model.localRunner.isRunning ? "Running" : "Stopped", kind: model.localRunner.isRunning ? .success : .neutral)
             }
-            if let error = model.localRunner.lastError {
-                Text(error)
-                    .foregroundStyle(.red)
+
+            Section("Split View") {
+                LabeledContent("Sidebar width") {
+                    Stepper(value: $sidebarWidth, in: 170...280, step: 10) {
+                        Text("\(Int(sidebarWidth)) px")
+                            .monospacedDigit()
+                    }
+                }
+                LabeledContent("Diagnostics detail") {
+                    Stepper(value: $diagnosticsDetailWidth, in: 280...620, step: 20) {
+                        Text("\(Int(diagnosticsDetailWidth)) px")
+                            .monospacedDigit()
+                    }
+                }
             }
-            ScrollView {
-                Text(model.localRunner.lastOutput.isEmpty ? "No output yet." : model.localRunner.lastOutput)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+
+            Section {
+                Button {
+                    defaultWindowWidth = AppLayoutDefaults.windowWidth
+                    defaultWindowHeight = AppLayoutDefaults.windowHeight
+                    sidebarWidth = AppLayoutDefaults.sidebarWidth
+                    diagnosticsDetailWidth = AppLayoutDefaults.diagnosticsDetailWidth
+                } label: {
+                    Label("Reset Layout", systemImage: "arrow.counterclockwise")
+                }
             }
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
-        .padding()
+        .formStyle(.grouped)
+    }
+
+    private func saveDraft() {
+        model.saveProfile(draft, token: token)
     }
 
     private func loadDraft() {

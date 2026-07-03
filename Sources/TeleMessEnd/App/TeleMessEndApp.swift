@@ -12,12 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct TeleMessEndApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @AppStorage(AppPreferenceKeys.defaultWindowWidth) private var defaultWindowWidth = AppLayoutDefaults.windowWidth
+    @AppStorage(AppPreferenceKeys.defaultWindowHeight) private var defaultWindowHeight = AppLayoutDefaults.windowHeight
 
     var body: some Scene {
         WindowGroup("Tele Mess End", id: "main") {
             ContentView(model: model)
-                .frame(minWidth: 1100, minHeight: 720)
+                .frame(minWidth: 980, minHeight: 640)
         }
+        .defaultSize(width: defaultWindowWidth, height: defaultWindowHeight)
         .commands {
             CommandMenu("Core") {
                 Button("Refresh") {

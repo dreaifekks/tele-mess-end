@@ -2,10 +2,12 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var model: AppModel
+    @AppStorage(AppPreferenceKeys.sidebarWidth) private var sidebarWidth = AppLayoutDefaults.sidebarWidth
 
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $model.selectedSection)
+                .navigationSplitViewColumnWidth(min: 170, ideal: sidebarWidth, max: 280)
         } detail: {
             detailView
                 .toolbar {
@@ -25,7 +27,8 @@ struct ContentView: View {
                             Label("Console", systemImage: "safari")
                         }
 
-                        StatusBadge(text: model.statusMessage, kind: model.lastError == nil ? .neutral : .error)
+                        StatusBadge(text: toolbarStatusText, kind: model.lastError == nil ? .neutral : .error)
+                            .help(model.lastError ?? model.statusMessage)
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
@@ -35,6 +38,7 @@ struct ContentView: View {
         .task {
             await model.loadDashboard()
         }
+        .background(WindowFrameAutosaveView(autosaveName: "TeleMessEndMainWindow"))
     }
 
     @ViewBuilder
@@ -51,6 +55,19 @@ struct ContentView: View {
         case .diagnostics:
             DiagnosticsView(model: model)
         }
+    }
+
+    private var toolbarStatusText: String {
+        guard let error = model.lastError else {
+            return model.statusMessage
+        }
+        if error.localizedCaseInsensitiveContains("could not connect") {
+            return "Connection failed"
+        }
+        if error.localizedCaseInsensitiveContains("unauthorized") || error.localizedCaseInsensitiveContains("401") {
+            return "Auth failed"
+        }
+        return "Error"
     }
 }
 

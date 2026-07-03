@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiagnosticsView: View {
     @Bindable var model: AppModel
+    @AppStorage(AppPreferenceKeys.diagnosticsDetailWidth) private var detailWidth = AppLayoutDefaults.diagnosticsDetailWidth
     @State private var selectedOperationEventID: CoreOperationEvent.ID?
     @State private var selectedParticipantID: CoreParticipant.ID?
     @State private var selectedCursorID: CoreCaptureCursor.ID?
@@ -65,7 +66,7 @@ struct DiagnosticsView: View {
             tableContent
 
             RawPayloadView(title: selectedDetailTitle, payload: selectedDetailPayload)
-                .frame(minWidth: 280, idealWidth: 360, maxWidth: 520)
+                .frame(minWidth: 280, idealWidth: detailWidth, maxWidth: 620)
                 .padding(.leading, 12)
         }
     }

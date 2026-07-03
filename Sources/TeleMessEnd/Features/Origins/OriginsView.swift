@@ -7,17 +7,16 @@ struct OriginsView: View {
     @State private var manageMode = false
     @State private var managedSelection = Set<CoreOrigin.ID>()
     @State private var sortOrder: [KeyPathComparator<CoreOrigin>] = []
+    @State private var lastClickedOriginID: CoreOrigin.ID?
+    private let inlineInspectorMinimumWidth: CGFloat = 1120
 
     var body: some View {
-        HSplitView {
-            VStack(alignment: .leading, spacing: 14) {
-                filters
-                originsTable
+        GeometryReader { proxy in
+            if proxy.size.width >= inlineInspectorMinimumWidth {
+                wideLayout
+            } else {
+                compactLayout(containerWidth: proxy.size.width)
             }
-            .padding(20)
-
-            OriginInspectorView(model: model, selectedOrigins: inspectorOrigins)
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
         }
         .navigationTitle("Origins")
         .task {
@@ -43,6 +42,46 @@ struct OriginsView: View {
                 model.selectedOriginID = managedSelection.first
             }
         }
+    }
+
+    private var mainContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            filters
+            originsTable
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var wideLayout: some View {
+        HSplitView {
+            mainContent
+
+            OriginInspectorView(model: model, selectedOrigins: inspectorOrigins)
+                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+        }
+    }
+
+    private func compactLayout(containerWidth: CGFloat) -> some View {
+        ZStack(alignment: .trailing) {
+            mainContent
+
+            if !inspectorOrigins.isEmpty {
+                OriginInspectorView(model: model, selectedOrigins: inspectorOrigins)
+                    .frame(width: compactInspectorWidth(containerWidth: containerWidth))
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .leading) {
+                        Divider()
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: inspectorOrigins.map(\.id))
+    }
+
+    private func compactInspectorWidth(containerWidth: CGFloat) -> CGFloat {
+        min(360, max(300, containerWidth * 0.36))
     }
 
     private var filters: some View {
@@ -122,55 +161,67 @@ struct OriginsView: View {
     @TableColumnBuilder<CoreOrigin, KeyPathComparator<CoreOrigin>>
     private var originColumns: some TableColumnContent<CoreOrigin, KeyPathComparator<CoreOrigin>> {
         TableColumn("Title", sortUsing: KeyPathComparator(\CoreOrigin.displayTitle)) { origin in
-            HStack(spacing: 8) {
-                if hasTopicChildren(origin) {
-                    Button {
-                        toggleExpanded(origin)
-                    } label: {
-                        Image(systemName: isExpanded(origin) ? "chevron.down" : "chevron.right")
+            selectableCell(origin) {
+                HStack(spacing: 8) {
+                    if hasTopicChildren(origin) {
+                        Button {
+                            toggleExpanded(origin)
+                        } label: {
+                            Image(systemName: isExpanded(origin) ? "chevron.down" : "chevron.right")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isExpanded(origin) ? "Collapse topics" : "Show topics")
+                    } else if origin.isTopic {
+                        Image(systemName: "arrow.turn.down.right")
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 12)
                     }
-                    .buttonStyle(.borderless)
-                    .help(isExpanded(origin) ? "Collapse topics" : "Show topics")
-                } else if origin.isTopic {
-                    Image(systemName: "arrow.turn.down.right")
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 12)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(origin.displayTitle)
-                        .lineLimit(1)
-                    Text("\(origin.originID) / topic \(origin.topicID)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(origin.displayTitle)
+                            .lineLimit(1)
+                        Text("\(origin.originID) / topic \(origin.topicID)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
         .width(min: 220, ideal: 320)
 
         TableColumn("Account", sortUsing: KeyPathComparator(\CoreOrigin.accountID)) { origin in
-            Text(origin.accountID)
+            selectableCell(origin) {
+                Text(origin.accountID)
+            }
         }
         .width(min: 90, ideal: 120)
 
         TableColumn("Type", sortUsing: KeyPathComparator(\CoreOrigin.originType)) { origin in
-            StatusBadge(text: origin.originType)
+            selectableCell(origin) {
+                StatusBadge(text: origin.originType)
+            }
         }
         .width(min: 90, ideal: 110)
 
         TableColumn("Backup", sortUsing: KeyPathComparator(\CoreOrigin.backupSortValue)) { origin in
             let enabled = origin.backupPolicy?.enabled ?? false
-            StatusBadge(text: enabled ? "On" : "Off", kind: enabled ? .success : .neutral)
+            selectableCell(origin) {
+                StatusBadge(text: enabled ? "On" : "Off", kind: enabled ? .success : .neutral)
+            }
         }
         .width(min: 80, ideal: 90)
 
         TableColumn("Tags", sortUsing: KeyPathComparator(\CoreOrigin.tagsSortValue)) { origin in
-            Text(origin.backupPolicy?.tags ?? "")
-                .lineLimit(1)
+            selectableCell(origin) {
+                Text(origin.backupPolicy?.tags ?? "")
+                    .lineLimit(1)
+            }
         }
 
         TableColumn("Last Message", sortUsing: KeyPathComparator(\CoreOrigin.lastMessageSortValue)) { origin in
-            Text(DisplayFormat.shortDateTime(origin.lastMessageAt))
-                .foregroundStyle(.secondary)
+            selectableCell(origin) {
+                Text(DisplayFormat.shortDateTime(origin.lastMessageAt))
+                    .foregroundStyle(.secondary)
+            }
         }
         .width(min: 140, ideal: 180)
     }
@@ -179,10 +230,9 @@ struct OriginsView: View {
         Binding(
             get: { model.selectedOriginID },
             set: { nextSelection in
-                if model.selectedOriginID == nextSelection {
-                    model.selectedOriginID = nil
-                } else {
-                    model.selectedOriginID = nextSelection
+                model.selectedOriginID = nextSelection
+                if nextSelection == nil {
+                    lastClickedOriginID = nil
                 }
             }
         )
@@ -268,6 +318,24 @@ struct OriginsView: View {
         } else {
             expandedGroups.insert(key)
         }
+    }
+
+    private func selectableCell<Content: View>(_ origin: CoreOrigin, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !manageMode else { return }
+                DispatchQueue.main.async {
+                    if model.selectedOriginID == origin.id, lastClickedOriginID == origin.id {
+                        model.selectedOriginID = nil
+                        lastClickedOriginID = nil
+                    } else {
+                        model.selectedOriginID = origin.id
+                        lastClickedOriginID = origin.id
+                    }
+                }
+            }
     }
 
     private func groupKey(for origin: CoreOrigin) -> String {

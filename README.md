@@ -8,14 +8,19 @@ app talks to the same HTTP API used by the built-in `/console` web UI.
 
 ## Product Scope
 
-Initial surfaces:
+V1 surfaces:
 
-- Dashboard: service status, sync state, recent messages, failed operation events.
-- Accounts: account list and Telegram login flow, including code and 2FA password.
-- Origins: table-first management for groups, channels, topics, archival state,
-  batch selection, and backup policy editing.
-- Policy Tags: chip/tag editor aligned with the existing console behavior.
-- Members and Media: read-only lists first, then refresh/delete workflows.
+- Dashboard: service status, sync state, recent messages, operation errors, and
+  web console shortcut.
+- Accounts: account metadata plus Telegram auth status, code request, code
+  submit, and 2FA password flow.
+- Origins: table-first management for groups, channels, topics, archive state,
+  discovery, filtering, and backup policy editing.
+- Policies and tags: per-origin text/media/download toggles plus chip-style tag
+  editing.
+- Messages and search: recent messages and full-text search backed by the core.
+- Diagnostics: operation events, capture cursors, participants, participant
+  refresh, and media-file metadata.
 
 ## Core Connection Model
 
@@ -36,6 +41,8 @@ Electron, Tauri, or web-wrapper app. The current decision record is in
 
 Core API mapping is tracked in
 [`docs/core-api-surface.md`](docs/core-api-surface.md).
+
+V1 implementation scope is tracked in [`docs/v1-scope.md`](docs/v1-scope.md).
 
 ## Repository Status
 

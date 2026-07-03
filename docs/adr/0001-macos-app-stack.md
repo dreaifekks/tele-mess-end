@@ -14,7 +14,8 @@ sent as either `Authorization: Bearer <token>` or `X-Api-Token: <token>`.
 
 The UI must be good at repeated desktop workflows: scanning recent sync state,
 triaging failed events, managing many origins/topics in a dense table, editing
-backup policies and tags, and running Telegram account auth flows.
+backup policies and tags, inspecting participant/media/cursor diagnostics, and
+running Telegram account auth flows.
 
 ## Decision
 
@@ -76,8 +77,8 @@ TeleMessEnd/
     Accounts/
     Origins/
     Policies/
-    Members/
-    Media/
+    Messages/
+    Diagnostics/
     Settings/
   CoreAPI/
     CoreAPIClient.swift
@@ -117,12 +118,14 @@ Run action at that script. Keep both files outside app source.
 
 Use a desktop-first main window:
 
-- Sidebar modules: Dashboard, Accounts, Origins, Policies, Members, Media.
+- Sidebar modules: Dashboard, Accounts, Origins, Messages, Diagnostics.
 - Toolbar: active profile selector, connection status, refresh, and console
   shortcut.
 - Settings: manage remote/local core profiles and auth token storage.
 - Origins detail: table with filters, multi-select, archive/unarchive action,
   and an inspector for policy editing.
+- Diagnostics detail: operation events, participants, capture cursors, and media
+  metadata.
 
 ## API Client Contract
 
@@ -138,8 +141,8 @@ struct CoreAPIClient {
 
 Feature views should not construct raw URLs or headers. They should call
 feature-shaped methods such as `fetchSyncState()`, `listAccounts()`,
-`discoverOrigins(accountID:)`, `archiveOrigins(_:)`, and
-`searchMessages(query:)`.
+`listManagementAccounts()`, `discoverOrigins(accountID:)`, `archiveOrigin(_:)`,
+`setBackupPolicy(_:)`, `listOperationEvents(...)`, and `searchMessages(query:)`.
 
 ## Consequences
 

@@ -28,7 +28,7 @@ Give one operator a reliable Mac app to:
 - `script/build_and_run.sh` and `.codex/environments/environment.toml` wired for
   the Codex app Run action.
 - Main `WindowGroup` with `NavigationSplitView`.
-- Settings scene for core profiles and app preferences.
+- Settings scene for core profiles.
 - System-adaptive macOS styling.
 
 ### Core Profiles

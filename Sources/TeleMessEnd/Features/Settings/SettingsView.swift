@@ -5,20 +5,16 @@ struct SettingsView: View {
     @State private var draft = CoreProfile.defaultLocal
     @State private var token = ""
     @State private var confirmDeleteProfile = false
-    @AppStorage(AppPreferenceKeys.defaultWindowWidth) private var defaultWindowWidth = AppLayoutDefaults.windowWidth
-    @AppStorage(AppPreferenceKeys.defaultWindowHeight) private var defaultWindowHeight = AppLayoutDefaults.windowHeight
-    @AppStorage(AppPreferenceKeys.sidebarWidth) private var sidebarWidth = AppLayoutDefaults.sidebarWidth
-    @AppStorage(AppPreferenceKeys.diagnosticsDetailWidth) private var diagnosticsDetailWidth = AppLayoutDefaults.diagnosticsDetailWidth
 
     var body: some View {
-        TabView {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Core Settings")
+                .font(.title2.weight(.semibold))
+
             coreSettings
-                .tabItem { Label("Core", systemImage: "server.rack") }
-            layoutSettings
-                .tabItem { Label("Layout", systemImage: "rectangle.split.3x1") }
         }
-        .frame(width: 720, height: 560)
-        .scenePadding()
+        .frame(width: 860, height: 560)
+        .padding(24)
         .onAppear(perform: loadDraft)
         .onChange(of: model.profileStore.selectedProfileID) {
             loadDraft()
@@ -43,17 +39,20 @@ struct SettingsView: View {
                 ForEach(model.profileStore.profiles) { profile in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name)
+                            .font(.body.weight(.semibold))
                         Text(profile.kind.title)
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.vertical, 8)
                     .tag(Optional(profile.id))
                 }
             }
-            .frame(minWidth: 170, idealWidth: 200)
+            .listStyle(.sidebar)
+            .frame(minWidth: 220, idealWidth: 250, maxWidth: 300)
 
             Form {
-                Section("Core") {
+                Section("Connection") {
                     TextField("Name", text: $draft.name)
                     Picker("Mode", selection: $draft.kind) {
                         ForEach(CoreProfileKind.allCases) { kind in
@@ -106,7 +105,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Section {
+                Section("Actions") {
                     HStack {
                         Button {
                             saveDraft()
@@ -119,77 +118,39 @@ struct SettingsView: View {
                         } label: {
                             Label("Test Connection", systemImage: "network")
                         }
+                        Spacer()
                         Button(role: .destructive) {
                             confirmDeleteProfile = true
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
                         .disabled(model.profileStore.profiles.count <= 1)
-                        Spacer()
+                    }
+
+                    HStack {
                         Button {
                             draft = model.profileStore.addRemoteProfile()
                             token = ""
                         } label: {
-                            Label("Remote", systemImage: "plus")
+                            Label("Add Remote Core", systemImage: "plus")
                         }
+                        Spacer()
                         Button {
                             draft = model.profileStore.addLocalProfile()
                             token = ""
                         } label: {
-                            Label("Local", systemImage: "plus")
+                            Label("Add Local Core", systemImage: "plus")
                         }
                     }
                 }
             }
             .formStyle(.grouped)
-            .padding(.leading, 12)
+            .controlSize(.large)
+            .font(.body)
+            .frame(minWidth: 540)
+            .padding(.leading, 18)
         }
-    }
-
-    private var layoutSettings: some View {
-        Form {
-            Section("Window") {
-                LabeledContent("Default width") {
-                    Stepper(value: $defaultWindowWidth, in: 980...1800, step: 20) {
-                        Text("\(Int(defaultWindowWidth)) px")
-                            .monospacedDigit()
-                    }
-                }
-                LabeledContent("Default height") {
-                    Stepper(value: $defaultWindowHeight, in: 640...1200, step: 20) {
-                        Text("\(Int(defaultWindowHeight)) px")
-                            .monospacedDigit()
-                    }
-                }
-            }
-
-            Section("Split View") {
-                LabeledContent("Sidebar width") {
-                    Stepper(value: $sidebarWidth, in: 170...280, step: 10) {
-                        Text("\(Int(sidebarWidth)) px")
-                            .monospacedDigit()
-                    }
-                }
-                LabeledContent("Diagnostics detail") {
-                    Stepper(value: $diagnosticsDetailWidth, in: 280...620, step: 20) {
-                        Text("\(Int(diagnosticsDetailWidth)) px")
-                            .monospacedDigit()
-                    }
-                }
-            }
-
-            Section {
-                Button {
-                    defaultWindowWidth = AppLayoutDefaults.windowWidth
-                    defaultWindowHeight = AppLayoutDefaults.windowHeight
-                    sidebarWidth = AppLayoutDefaults.sidebarWidth
-                    diagnosticsDetailWidth = AppLayoutDefaults.diagnosticsDetailWidth
-                } label: {
-                    Label("Reset Layout", systemImage: "arrow.counterclockwise")
-                }
-            }
-        }
-        .formStyle(.grouped)
+        .frame(maxHeight: .infinity)
     }
 
     private func saveDraft() {

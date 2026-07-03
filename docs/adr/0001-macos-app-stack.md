@@ -24,7 +24,7 @@ Build a native macOS app with SwiftUI and Swift Concurrency.
 Primary framework choices:
 
 - App shell: SwiftUI `WindowGroup` for the main app window plus a dedicated
-  `Settings` scene for profiles and app preferences.
+  `Settings` scene for core profiles.
 - Layout: `NavigationSplitView` for module navigation, SwiftUI `Table` for
   origins and other dense management views, and inspectors/sheets for editing.
 - State: Swift Observation for app stores and feature state. Use view-local

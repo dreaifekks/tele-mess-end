@@ -2,17 +2,16 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var model: AppModel
-    @AppStorage(AppPreferenceKeys.sidebarWidth) private var sidebarWidth = AppLayoutDefaults.sidebarWidth
 
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $model.selectedSection)
-                .navigationSplitViewColumnWidth(min: 170, ideal: sidebarWidth, max: 280)
+                .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 280)
         } detail: {
             detailView
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
-                        ProfilePicker(model: model)
+                        ProfileMenu(model: model)
 
                         Button {
                             Task { await model.refreshCurrentSection() }
@@ -27,7 +26,7 @@ struct ContentView: View {
                             Label("Console", systemImage: "safari")
                         }
 
-                        StatusBadge(text: toolbarStatusText, kind: model.lastError == nil ? .neutral : .error)
+                        ToolbarStatusPill(text: toolbarStatusText, kind: model.lastError == nil ? .neutral : .error)
                             .help(model.lastError ?? model.statusMessage)
                     }
                 }
@@ -64,6 +63,9 @@ struct ContentView: View {
         if error.localizedCaseInsensitiveContains("could not connect") {
             return "Connection failed"
         }
+        if error.localizedCaseInsensitiveContains("App Transport Security") {
+            return "HTTP blocked"
+        }
         if error.localizedCaseInsensitiveContains("unauthorized") || error.localizedCaseInsensitiveContains("401") {
             return "Auth failed"
         }
@@ -71,19 +73,108 @@ struct ContentView: View {
     }
 }
 
-private struct ProfilePicker: View {
+private struct ProfileMenu: View {
     @Bindable var model: AppModel
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Picker("Profile", selection: Binding<UUID?>(
-            get: { model.profileStore.selectedProfileID },
-            set: { model.profileStore.select($0) }
-        )) {
+        Menu {
             ForEach(model.profileStore.profiles) { profile in
-                Text(profile.name).tag(Optional(profile.id))
+                Button {
+                    model.profileStore.select(profile.id)
+                } label: {
+                    Label(profile.name, systemImage: profile.id == model.profileStore.selectedProfileID ? "checkmark" : profile.kind.systemImage)
+                }
             }
+
+            Divider()
+
+            Button {
+                _ = model.profileStore.addRemoteProfile()
+                openSettings()
+            } label: {
+                Label("Add Remote Core", systemImage: "plus")
+            }
+
+            Button {
+                _ = model.profileStore.addLocalProfile()
+                openSettings()
+            } label: {
+                Label("Add Local Core", systemImage: "plus")
+            }
+
+            Divider()
+
+            Button {
+                openSettings()
+            } label: {
+                Label("Core Settings", systemImage: "gearshape")
+            }
+        } label: {
+            ToolbarPillLabel(title: model.selectedProfile?.name ?? "Core")
         }
-        .frame(minWidth: 170)
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ToolbarPillLabel: View {
+    var title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 14)
+        .frame(minWidth: 150, maxWidth: 210, minHeight: 30)
+        .background(.quaternary.opacity(0.55), in: Capsule())
+        .contentShape(Capsule())
+    }
+}
+
+private struct ToolbarStatusPill: View {
+    var text: String
+    var kind: StatusBadgeKind
+
+    var body: some View {
+        Text(text)
+            .font(.callout.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .frame(minWidth: 64, minHeight: 30)
+            .background(background, in: Capsule())
+            .foregroundStyle(foreground)
+            .contentShape(Capsule())
+    }
+
+    private var background: Color {
+        switch kind {
+        case .neutral:
+            Color.secondary.opacity(0.12)
+        case .success:
+            Color.green.opacity(0.14)
+        case .warning:
+            Color.orange.opacity(0.16)
+        case .error:
+            Color.red.opacity(0.16)
+        }
+    }
+
+    private var foreground: Color {
+        switch kind {
+        case .neutral:
+            .secondary
+        case .success:
+            .green
+        case .warning:
+            .orange
+        case .error:
+            .red
+        }
     }
 }
 

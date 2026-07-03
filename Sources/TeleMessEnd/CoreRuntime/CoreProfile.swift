@@ -14,6 +14,15 @@ enum CoreProfileKind: String, Codable, CaseIterable, Identifiable {
             "Local"
         }
     }
+
+    var systemImage: String {
+        switch self {
+        case .remote:
+            "network"
+        case .local:
+            "desktopcomputer"
+        }
+    }
 }
 
 struct CoreProfile: Identifiable, Codable, Hashable {

@@ -31,7 +31,7 @@ participants, cursors, and media metadata through the typed Swift client.
 | Multi-file structure | Complete | App, CoreAPI, CoreRuntime, feature views, shared UI, support, scripts, and docs are split by responsibility. |
 | Codex Run action | Complete | `script/build_and_run.sh` and `.codex/environments/environment.toml` are present; `./script/build_and_run.sh --verify` passed. |
 | Main `NavigationSplitView` | Complete | `ContentView` composes sidebar-detail navigation. |
-| Settings scene | Complete | `TeleMessEndApp` defines `Settings`; `SettingsView` manages profiles and local runner. |
+| Settings scene | Complete | `TeleMessEndApp` defines `Settings`; `SettingsView` manages core profiles and the local runner. |
 | System-adaptive styling | Complete | Views use SwiftUI semantic styles/materials instead of fixed custom palettes. |
 | Remote/local profiles | Complete | `CoreProfile`, `CoreProfileStore`, `SettingsView`, and `LocalCoreProcessController` cover remote and local profiles. |
 | Keychain token storage | Complete | `KeychainStore` stores tokens per profile UUID. |
@@ -45,7 +45,7 @@ participants, cursors, and media metadata through the typed Swift client.
 | Origins and policies | Complete | `OriginsView` lists origins, filters by account/search/type/backup/tag/archive, sorts by required modes, presents group/topic rows, discovers origins, archives/restores/deletes with confirmation, and edits policy/tag fields. |
 | Messages and search | Complete | `MessagesView` and `MessageTable` load recent messages, search `/sync/search`, and display account/chat/sender/time/text/deleted/media/permalink. |
 | Diagnostics | Complete | `DiagnosticsView` covers operation events, participants, cursors, media files, participant refresh, filters, and raw payload detail panel. |
-| Local core runner | Complete | `SettingsView` local runtime tab starts/stops configured local command and displays status, output, and process errors. |
+| Local core runner | Complete | `SettingsView` local runtime section starts/stops configured local command and displays status, output, and process errors. |
 
 ## Acceptance Criteria
 

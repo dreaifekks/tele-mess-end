@@ -56,6 +56,15 @@ Run locally:
 ./script/build_and_run.sh
 ```
 
+Run Core API contract tests without XCTest:
+
+```bash
+./script/test_core_api.sh
+```
+
+These tests compile the typed Core API client with mocked transport fixtures and
+real snake_case response payloads from the core API surface.
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE).

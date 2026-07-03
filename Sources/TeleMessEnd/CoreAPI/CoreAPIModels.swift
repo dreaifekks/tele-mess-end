@@ -96,6 +96,12 @@ struct CorePage<Item: Decodable>: Decodable {
     var items: [Item]
     var nextCursor: Int?
     var hasMore: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+    }
 }
 
 struct CoreWriteResponse<Item: Decodable>: Decodable {
@@ -116,6 +122,16 @@ struct CoreState: Codable, Equatable {
     var operationErrorCount: Int?
     var serverTime: String?
     var ok: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case databaseID = "database_id"
+        case schemaVersion = "schema_version"
+        case lastEventSeq = "last_event_seq"
+        case messageCount = "message_count"
+        case operationErrorCount = "operation_error_count"
+        case serverTime = "server_time"
+        case ok
+    }
 }
 
 struct CoreCapabilities: Decodable, Equatable {
@@ -123,6 +139,13 @@ struct CoreCapabilities: Decodable, Equatable {
     var sync: [String]?
     var management: [String]?
     var authFlow: JSONValue?
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case sync
+        case management
+        case authFlow = "auth_flow"
+    }
 }
 
 struct CoreAccount: Decodable, Identifiable, Hashable {
@@ -142,6 +165,22 @@ struct CoreAccount: Decodable, Identifiable, Hashable {
 
     var id: String { "\(source):\(accountID)" }
     var title: String { displayName?.isEmpty == false ? displayName! : accountID }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case displayName = "display_name"
+        case kind
+        case updatedAt = "updated_at"
+        case rawJSON = "raw_json"
+        case authState = "auth_state"
+        case phone
+        case sessionName = "session_name"
+        case sessionDir = "session_dir"
+        case lastError = "last_error"
+        case authUpdatedAt = "auth_updated_at"
+        case authRawJSON = "auth_raw_json"
+    }
 }
 
 struct CoreOrigin: Decodable, Identifiable, Hashable {
@@ -167,8 +206,21 @@ struct CoreOrigin: Decodable, Identifiable, Hashable {
     var isTopic: Bool { topicID != 0 }
 
     private enum CodingKeys: String, CodingKey {
-        case source, accountID, originID, topicID, originType, parentOriginID, title, username
-        case isForum, archivedAt, lastMessageAt, discoveredAt, updatedAt, rawJSON, backupPolicy
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+        case originType = "origin_type"
+        case parentOriginID = "parent_origin_id"
+        case title
+        case username
+        case isForum = "is_forum"
+        case archivedAt = "archived_at"
+        case lastMessageAt = "last_message_at"
+        case discoveredAt = "discovered_at"
+        case updatedAt = "updated_at"
+        case rawJSON = "raw_json"
+        case backupPolicy = "backup_policy"
     }
 
     init(from decoder: Decoder) throws {
@@ -206,7 +258,16 @@ struct CoreBackupPolicy: Codable, Identifiable, Hashable {
     var id: String { "\(source ?? "telegram"):\(accountID ?? ""):\(originID ?? 0):\(topicID ?? 0)" }
 
     private enum CodingKeys: String, CodingKey {
-        case source, accountID, originID, topicID, enabled, captureText, captureMediaMetadata, downloadMedia, tags, updatedAt
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+        case enabled
+        case captureText = "capture_text"
+        case captureMediaMetadata = "capture_media_metadata"
+        case downloadMedia = "download_media"
+        case tags
+        case updatedAt = "updated_at"
     }
 
     init(
@@ -281,9 +342,31 @@ struct CoreMessage: Decodable, Identifiable, Hashable {
     var displaySender: String { senderName?.isEmpty == false ? senderName! : senderUsername ?? "" }
 
     private enum CodingKeys: String, CodingKey {
-        case eventSeq, source, accountID, chatID, messageID, topicID, chatTitle, senderID, senderName, senderUsername
-        case sentAt, editedAt, ingestedAt, deletedAt, text, hasMedia, mediaKind, groupedID, replyToMessageID
-        case forwardFromID, forwardFromName, permalink, reactionsJSON, rawJSON, version
+        case eventSeq = "event_seq"
+        case source
+        case accountID = "account_id"
+        case chatID = "chat_id"
+        case messageID = "message_id"
+        case topicID = "topic_id"
+        case chatTitle = "chat_title"
+        case senderID = "sender_id"
+        case senderName = "sender_name"
+        case senderUsername = "sender_username"
+        case sentAt = "sent_at"
+        case editedAt = "edited_at"
+        case ingestedAt = "ingested_at"
+        case deletedAt = "deleted_at"
+        case text
+        case hasMedia = "has_media"
+        case mediaKind = "media_kind"
+        case groupedID = "grouped_id"
+        case replyToMessageID = "reply_to_message_id"
+        case forwardFromID = "forward_from_id"
+        case forwardFromName = "forward_from_name"
+        case permalink
+        case reactionsJSON = "reactions_json"
+        case rawJSON = "raw_json"
+        case version
     }
 
     init(from decoder: Decoder) throws {
@@ -332,7 +415,17 @@ struct CoreParticipant: Decodable, Identifiable, Hashable {
     var id: String { "\(source):\(accountID):\(originID):\(userID)" }
 
     private enum CodingKeys: String, CodingKey {
-        case source, accountID, originID, userID, username, displayName, isBot, role, lastSeenAt, updatedAt, rawJSON
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case userID = "user_id"
+        case username
+        case displayName = "display_name"
+        case isBot = "is_bot"
+        case role
+        case lastSeenAt = "last_seen_at"
+        case updatedAt = "updated_at"
+        case rawJSON = "raw_json"
     }
 
     init(from decoder: Decoder) throws {
@@ -364,6 +457,19 @@ struct CoreCaptureCursor: Decodable, Identifiable, Hashable {
     var originTitle: String?
 
     var id: String { "\(source):\(accountID):\(originID):\(topicID)" }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+        case lastMessageID = "last_message_id"
+        case lastMessageAt = "last_message_at"
+        case lastBackfillAt = "last_backfill_at"
+        case updatedAt = "updated_at"
+        case rawJSON = "raw_json"
+        case originTitle = "origin_title"
+    }
 }
 
 struct CoreMediaFile: Decodable, Identifiable, Hashable {
@@ -381,6 +487,21 @@ struct CoreMediaFile: Decodable, Identifiable, Hashable {
     var chatTitle: String?
 
     var id: String { "\(source):\(accountID):\(chatID):\(messageID):\(fileIndex)" }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case chatID = "chat_id"
+        case messageID = "message_id"
+        case fileIndex = "file_index"
+        case filePath = "file_path"
+        case mediaKind = "media_kind"
+        case mimeType = "mime_type"
+        case fileSize = "file_size"
+        case downloadedAt = "downloaded_at"
+        case rawJSON = "raw_json"
+        case chatTitle = "chat_title"
+    }
 }
 
 struct CoreOperationEvent: Decodable, Identifiable, Hashable {
@@ -396,6 +517,21 @@ struct CoreOperationEvent: Decodable, Identifiable, Hashable {
     var retryAfter: Int?
     var occurredAt: String?
     var rawJSON: JSONValue?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case source
+        case accountID = "account_id"
+        case operation
+        case status
+        case subjectType = "subject_type"
+        case subjectID = "subject_id"
+        case errorCode = "error_code"
+        case message
+        case retryAfter = "retry_after"
+        case occurredAt = "occurred_at"
+        case rawJSON = "raw_json"
+    }
 }
 
 struct DeleteResult: Decodable, Hashable {
@@ -405,6 +541,15 @@ struct DeleteResult: Decodable, Hashable {
     var topicID: Int?
     var userID: Int?
     var deletedRows: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+        case userID = "user_id"
+        case deletedRows = "deleted_rows"
+    }
 }
 
 struct ArchiveOriginResult: Decodable, Hashable {
@@ -414,6 +559,15 @@ struct ArchiveOriginResult: Decodable, Hashable {
     var topicID: Int
     var archived: Bool
     var changedRows: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+        case archived
+        case changedRows = "changed_rows"
+    }
 }
 
 struct AuthOperationResult: Decodable, Hashable {
@@ -426,6 +580,18 @@ struct AuthOperationResult: Decodable, Hashable {
     var lastError: String?
     var code: String?
     var detail: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case authState = "auth_state"
+        case status
+        case phone
+        case message
+        case lastError = "last_error"
+        case code
+        case detail
+    }
 }
 
 struct DiscoveryResult: Decodable, Hashable {
@@ -437,6 +603,17 @@ struct DiscoveryResult: Decodable, Hashable {
     var skippedPrivate: Int?
     var status: String?
     var message: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case discovered
+        case origins
+        case topics
+        case skippedPrivate = "skipped_private"
+        case status
+        case message
+    }
 }
 
 struct ParticipantRefreshResult: Decodable, Hashable {
@@ -446,6 +623,15 @@ struct ParticipantRefreshResult: Decodable, Hashable {
     var refreshed: Int?
     var status: String?
     var message: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case refreshed
+        case status
+        case message
+    }
 }
 
 struct CreateAccountRequest: Encodable {
@@ -579,7 +765,6 @@ extension JSONEncoder {
 extension JSONDecoder {
     static var core: JSONDecoder {
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
     }
 }

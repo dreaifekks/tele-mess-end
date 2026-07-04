@@ -5,6 +5,8 @@ enum AppSection: String, CaseIterable, Identifiable {
     case accounts
     case origins
     case messages
+    case media
+    case summaries
     case diagnostics
 
     var id: String { rawValue }
@@ -19,6 +21,10 @@ enum AppSection: String, CaseIterable, Identifiable {
             "Origins"
         case .messages:
             "Messages"
+        case .media:
+            "Media"
+        case .summaries:
+            "Daily Summary"
         case .diagnostics:
             "Diagnostics"
         }
@@ -34,6 +40,10 @@ enum AppSection: String, CaseIterable, Identifiable {
             "rectangle.stack"
         case .messages:
             "bubble.left.and.text.bubble.right"
+        case .media:
+            "photo.on.rectangle"
+        case .summaries:
+            "calendar.badge.clock"
         case .diagnostics:
             "stethoscope"
         }

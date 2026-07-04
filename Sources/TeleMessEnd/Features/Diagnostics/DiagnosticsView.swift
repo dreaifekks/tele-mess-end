@@ -229,7 +229,7 @@ private struct CaptureCursorsTable: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            TableColumn("Last Message") { Text("\($0.lastMessageID)") }
+            TableColumn("Last Message") { Text($0.lastMessageID.map(String.init) ?? "") }
             TableColumn("Message Time") { Text(DisplayFormat.shortDateTime($0.lastMessageAt)).foregroundStyle(.secondary) }
             TableColumn("Backfill") { Text(DisplayFormat.shortDateTime($0.lastBackfillAt)).foregroundStyle(.secondary) }
         }
@@ -254,7 +254,8 @@ private struct MediaFilesTable: View {
             }
             TableColumn("Kind") { Text($0.mediaKind ?? "") }
             TableColumn("Size") { Text($0.fileSize.map(String.init) ?? "") }
-            TableColumn("Path") { Text($0.filePath).lineLimit(1) }
+            TableColumn("Preview") { Text($0.previewKind ?? $0.contentType ?? "") }
+            TableColumn("Path") { Text($0.filePath ?? $0.bestURLString ?? "").lineLimit(1) }
         }
     }
 }

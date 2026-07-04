@@ -108,6 +108,28 @@ struct CoreWriteResponse<Item: Decodable>: Decodable {
     var item: Item
 }
 
+struct CoreAPIManifest: Decodable, Equatable {
+    var name: String?
+    var contractVersion: String
+    var contractHash: String
+    var openAPIURL: String?
+    var markdownURL: String?
+    var agentDoc: String?
+    var endpoints: [JSONValue]
+    var schemas: JSONValue?
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case contractVersion = "contract_version"
+        case contractHash = "contract_hash"
+        case openAPIURL = "openapi_url"
+        case markdownURL = "markdown_url"
+        case agentDoc = "agent_doc"
+        case endpoints
+        case schemas
+    }
+}
+
 struct CoreAPIErrorPayload: Decodable {
     var error: String?
     var detail: String?
@@ -123,6 +145,10 @@ struct CoreState: Codable, Equatable {
     var serverTime: String?
     var ok: Bool?
 
+    var schemaVersionText: String {
+        schemaVersion ?? "-"
+    }
+
     private enum CodingKeys: String, CodingKey {
         case databaseID = "database_id"
         case schemaVersion = "schema_version"
@@ -132,6 +158,52 @@ struct CoreState: Codable, Equatable {
         case serverTime = "server_time"
         case ok
     }
+
+    init(
+        databaseID: String?,
+        schemaVersion: String?,
+        lastEventSeq: Int,
+        messageCount: Int,
+        operationErrorCount: Int?,
+        serverTime: String?,
+        ok: Bool?
+    ) {
+        self.databaseID = databaseID
+        self.schemaVersion = schemaVersion
+        self.lastEventSeq = lastEventSeq
+        self.messageCount = messageCount
+        self.operationErrorCount = operationErrorCount
+        self.serverTime = serverTime
+        self.ok = ok
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        databaseID = try container.decodeIfPresent(String.self, forKey: .databaseID)
+        if let text = try? container.decodeIfPresent(String.self, forKey: .schemaVersion) {
+            schemaVersion = text
+        } else if let number = try? container.decodeIfPresent(Int.self, forKey: .schemaVersion) {
+            schemaVersion = String(number)
+        } else {
+            schemaVersion = nil
+        }
+        lastEventSeq = try container.decode(Int.self, forKey: .lastEventSeq)
+        messageCount = try container.decode(Int.self, forKey: .messageCount)
+        operationErrorCount = try container.decodeIfPresent(Int.self, forKey: .operationErrorCount)
+        serverTime = try container.decodeIfPresent(String.self, forKey: .serverTime)
+        ok = try container.decodeIfPresent(Bool.self, forKey: .ok)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(databaseID, forKey: .databaseID)
+        try container.encodeIfPresent(schemaVersion, forKey: .schemaVersion)
+        try container.encode(lastEventSeq, forKey: .lastEventSeq)
+        try container.encode(messageCount, forKey: .messageCount)
+        try container.encodeIfPresent(operationErrorCount, forKey: .operationErrorCount)
+        try container.encodeIfPresent(serverTime, forKey: .serverTime)
+        try container.encodeIfPresent(ok, forKey: .ok)
+    }
 }
 
 struct CoreCapabilities: Decodable, Equatable {
@@ -139,12 +211,14 @@ struct CoreCapabilities: Decodable, Equatable {
     var sync: [String]?
     var management: [String]?
     var authFlow: JSONValue?
+    var apiContract: JSONValue?
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case sync
         case management
         case authFlow = "auth_flow"
+        case apiContract = "api_contract"
     }
 }
 
@@ -197,6 +271,8 @@ struct CoreOrigin: Decodable, Identifiable, Hashable {
     var lastMessageAt: String?
     var discoveredAt: String?
     var updatedAt: String?
+    var parentTitle: String?
+    var important: Bool
     var rawJSON: JSONValue?
     var backupPolicy: CoreBackupPolicy?
 
@@ -222,6 +298,8 @@ struct CoreOrigin: Decodable, Identifiable, Hashable {
         case lastMessageAt = "last_message_at"
         case discoveredAt = "discovered_at"
         case updatedAt = "updated_at"
+        case parentTitle = "parent_title"
+        case important
         case rawJSON = "raw_json"
         case backupPolicy = "backup_policy"
     }
@@ -241,6 +319,8 @@ struct CoreOrigin: Decodable, Identifiable, Hashable {
         lastMessageAt = try container.decodeIfPresent(String.self, forKey: .lastMessageAt)
         discoveredAt = try container.decodeIfPresent(String.self, forKey: .discoveredAt)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        parentTitle = try container.decodeIfPresent(String.self, forKey: .parentTitle)
+        important = try container.decodeFlexibleBool(forKey: .important) ?? false
         rawJSON = try container.decodeIfPresent(JSONValue.self, forKey: .rawJSON)
         backupPolicy = try container.decodeIfPresent(CoreBackupPolicy.self, forKey: .backupPolicy)
     }
@@ -330,11 +410,14 @@ struct CoreMessage: Decodable, Identifiable, Hashable {
     var text: String?
     var hasMedia: Bool
     var mediaKind: String?
+    var mediaCount: Int?
+    var mediaFiles: [CoreMediaFile]?
     var groupedID: String?
     var replyToMessageID: Int?
     var forwardFromID: String?
     var forwardFromName: String?
     var permalink: String?
+    var originTitle: String?
     var reactionsJSON: JSONValue?
     var rawJSON: JSONValue?
     var version: Int?
@@ -379,11 +462,14 @@ struct CoreMessage: Decodable, Identifiable, Hashable {
         case text
         case hasMedia = "has_media"
         case mediaKind = "media_kind"
+        case mediaCount = "media_count"
+        case mediaFiles = "media_files"
         case groupedID = "grouped_id"
         case replyToMessageID = "reply_to_message_id"
         case forwardFromID = "forward_from_id"
         case forwardFromName = "forward_from_name"
         case permalink
+        case originTitle = "origin_title"
         case reactionsJSON = "reactions_json"
         case rawJSON = "raw_json"
         case version
@@ -408,14 +494,66 @@ struct CoreMessage: Decodable, Identifiable, Hashable {
         text = try container.decodeIfPresent(String.self, forKey: .text)
         hasMedia = try container.decodeFlexibleBool(forKey: .hasMedia) ?? false
         mediaKind = try container.decodeIfPresent(String.self, forKey: .mediaKind)
+        mediaCount = try container.decodeIfPresent(Int.self, forKey: .mediaCount)
+        mediaFiles = try container.decodeIfPresent([CoreMediaFile].self, forKey: .mediaFiles)
         groupedID = try container.decodeIfPresent(String.self, forKey: .groupedID)
         replyToMessageID = try container.decodeIfPresent(Int.self, forKey: .replyToMessageID)
         forwardFromID = try container.decodeIfPresent(String.self, forKey: .forwardFromID)
         forwardFromName = try container.decodeIfPresent(String.self, forKey: .forwardFromName)
         permalink = try container.decodeIfPresent(String.self, forKey: .permalink)
+        originTitle = try container.decodeIfPresent(String.self, forKey: .originTitle)
         reactionsJSON = try container.decodeIfPresent(JSONValue.self, forKey: .reactionsJSON)
         rawJSON = try container.decodeIfPresent(JSONValue.self, forKey: .rawJSON)
         version = try container.decodeIfPresent(Int.self, forKey: .version)
+    }
+}
+
+struct CoreEvent: Decodable, Identifiable, Hashable {
+    var seq: Int
+    var source: String
+    var accountID: String
+    var eventType: String
+    var chatID: Int?
+    var messageID: Int?
+    var eventAt: String?
+    var payloadJSON: JSONValue?
+
+    var id: Int { seq }
+
+    private enum CodingKeys: String, CodingKey {
+        case seq
+        case source
+        case accountID = "account_id"
+        case eventType = "event_type"
+        case chatID = "chat_id"
+        case messageID = "message_id"
+        case eventAt = "event_at"
+        case payloadJSON = "payload_json"
+    }
+}
+
+struct CoreChat: Decodable, Identifiable, Hashable {
+    var source: String
+    var accountID: String
+    var chatID: Int
+    var title: String?
+    var username: String?
+    var kind: String?
+    var updatedAt: String?
+    var rawJSON: JSONValue?
+
+    var id: String { "\(source):\(accountID):\(chatID)" }
+    var displayTitle: String { title?.isEmpty == false ? title! : "\(chatID)" }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case accountID = "account_id"
+        case chatID = "chat_id"
+        case title
+        case username
+        case kind
+        case updatedAt = "updated_at"
+        case rawJSON = "raw_json"
     }
 }
 
@@ -469,7 +607,7 @@ struct CoreCaptureCursor: Decodable, Identifiable, Hashable {
     var accountID: String
     var originID: Int
     var topicID: Int
-    var lastMessageID: Int
+    var lastMessageID: Int?
     var lastMessageAt: String?
     var lastBackfillAt: String?
     var updatedAt: String?
@@ -498,15 +636,46 @@ struct CoreMediaFile: Decodable, Identifiable, Hashable {
     var chatID: Int
     var messageID: Int
     var fileIndex: Int
-    var filePath: String
+    var filePath: String?
     var mediaKind: String?
     var mimeType: String?
     var fileSize: Int?
     var downloadedAt: String?
     var rawJSON: JSONValue?
     var chatTitle: String?
+    var originTitle: String?
+    var contentType: String?
+    var previewKind: String?
+    var accessURL: String?
+    var downloadURL: String?
 
     var id: String { "\(source):\(accountID):\(chatID):\(messageID):\(fileIndex)" }
+    var displayTitle: String { originTitle ?? chatTitle ?? "\(chatID)" }
+    var bestURLString: String? { downloadURL ?? accessURL }
+    var suggestedFilename: String {
+        if let filePath, !filePath.isEmpty {
+            let name = URL(fileURLWithPath: filePath).lastPathComponent
+            if !name.isEmpty {
+                return name
+            }
+        }
+        let ext: String
+        switch (mimeType ?? contentType ?? mediaKind ?? "").lowercased() {
+        case let value where value.contains("jpeg") || value.contains("jpg"):
+            ext = "jpg"
+        case let value where value.contains("png"):
+            ext = "png"
+        case let value where value.contains("gif"):
+            ext = "gif"
+        case let value where value.contains("mp4") || value.contains("video"):
+            ext = "mp4"
+        case let value where value.contains("pdf"):
+            ext = "pdf"
+        default:
+            ext = "bin"
+        }
+        return "media-\(chatID)-\(messageID)-\(fileIndex).\(ext)"
+    }
 
     private enum CodingKeys: String, CodingKey {
         case source
@@ -521,6 +690,11 @@ struct CoreMediaFile: Decodable, Identifiable, Hashable {
         case downloadedAt = "downloaded_at"
         case rawJSON = "raw_json"
         case chatTitle = "chat_title"
+        case originTitle = "origin_title"
+        case contentType = "content_type"
+        case previewKind = "preview_kind"
+        case accessURL = "access_url"
+        case downloadURL = "download_url"
     }
 }
 
@@ -536,6 +710,11 @@ struct CoreOperationEvent: Decodable, Identifiable, Hashable {
     var message: String?
     var retryAfter: Int?
     var occurredAt: String?
+    var error: JSONValue?
+    var errorType: String?
+    var authState: String?
+    var subject: JSONValue?
+    var subjectLabel: String?
     var rawJSON: JSONValue?
 
     private enum CodingKeys: String, CodingKey {
@@ -550,8 +729,301 @@ struct CoreOperationEvent: Decodable, Identifiable, Hashable {
         case message
         case retryAfter = "retry_after"
         case occurredAt = "occurred_at"
+        case error
+        case errorType = "error_type"
+        case authState = "auth_state"
+        case subject
+        case subjectLabel = "subject_label"
         case rawJSON = "raw_json"
     }
+}
+
+struct DailyPackageSchedule: Decodable, Hashable {
+    var enabled: Bool
+    var timeOfDay: String
+    var timezone: String
+    var scope: JSONValue
+    var systemManager: String
+    var installed: Bool
+    var lastInstalledAt: String?
+    var lastError: String?
+    var updatedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case timeOfDay = "time_of_day"
+        case timezone
+        case scope
+        case systemManager = "system_manager"
+        case installed
+        case lastInstalledAt = "last_installed_at"
+        case lastError = "last_error"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct DailyPackageScheduleInput: Encodable {
+    var enabled: Bool
+    var timeOfDay: String
+    var timezone: String
+    var scope: JSONValue?
+    var systemManager: String
+    var activateSystemd: Bool
+}
+
+struct DailyPackageRun: Decodable, Identifiable, Hashable {
+    var runID: String
+    var status: String
+    var date: String
+    var timezone: String
+    var scope: JSONValue?
+    var outputDir: String?
+    var packageJSONPath: String?
+    var packageMDPath: String?
+    var originCount: Int?
+    var messageCount: Int?
+    var mediaCount: Int?
+    var importantOriginCount: Int?
+    var progressCurrent: Int?
+    var progressTotal: Int?
+    var progressLabel: String?
+    var progress: JSONValue?
+    var error: String?
+    var startedAt: String?
+    var finishedAt: String?
+
+    var id: String { runID }
+
+    private enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case status
+        case date
+        case timezone
+        case scope
+        case outputDir = "output_dir"
+        case packageJSONPath = "package_json_path"
+        case packageMDPath = "package_md_path"
+        case originCount = "origin_count"
+        case messageCount = "message_count"
+        case mediaCount = "media_count"
+        case importantOriginCount = "important_origin_count"
+        case progressCurrent = "progress_current"
+        case progressTotal = "progress_total"
+        case progressLabel = "progress_label"
+        case progress
+        case error
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+    }
+}
+
+struct DailyPackageRunInput: Encodable {
+    var date: String?
+    var timezone: String?
+    var scope: JSONValue?
+    var accountID: String?
+    var originID: Int?
+    var topicID: Int?
+    var tags: String?
+    var tagGroups: [String]?
+}
+
+struct DailySummaryRun: Decodable, Identifiable, Hashable {
+    var runID: String
+    var status: String
+    var packageRunID: String?
+    var date: String?
+    var timezone: String?
+    var scope: JSONValue?
+    var outputDir: String?
+    var summaryPath: String?
+    var provider: String?
+    var originCount: Int?
+    var groupCount: Int?
+    var imageCount: Int?
+    var progressCurrent: Int?
+    var progressTotal: Int?
+    var progressLabel: String?
+    var progress: JSONValue?
+    var error: String?
+    var startedAt: String?
+    var finishedAt: String?
+
+    var id: String { runID }
+
+    private enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case status
+        case packageRunID = "package_run_id"
+        case date
+        case timezone
+        case scope
+        case outputDir = "output_dir"
+        case summaryPath = "summary_path"
+        case provider
+        case originCount = "origin_count"
+        case groupCount = "group_count"
+        case imageCount = "image_count"
+        case progressCurrent = "progress_current"
+        case progressTotal = "progress_total"
+        case progressLabel = "progress_label"
+        case progress
+        case error
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+    }
+}
+
+struct DailySummaryJob: Decodable, Identifiable, Hashable {
+    var jobID: String
+    var status: String
+    var packageRunID: String?
+    var summaryRunID: String?
+    var date: String?
+    var timezone: String?
+    var scope: JSONValue?
+    var provider: String?
+    var progressCurrent: Int?
+    var progressTotal: Int?
+    var progressLabel: String?
+    var progress: JSONValue?
+    var error: String?
+    var startedAt: String?
+    var updatedAt: String?
+    var finishedAt: String?
+    var cancelRequestedAt: String?
+
+    var id: String { jobID }
+
+    var isActive: Bool {
+        !["completed", "failed", "cancelled", "canceled"].contains(status.lowercased())
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case jobID = "job_id"
+        case status
+        case packageRunID = "package_run_id"
+        case summaryRunID = "summary_run_id"
+        case date
+        case timezone
+        case scope
+        case provider
+        case progressCurrent = "progress_current"
+        case progressTotal = "progress_total"
+        case progressLabel = "progress_label"
+        case progress
+        case error
+        case startedAt = "started_at"
+        case updatedAt = "updated_at"
+        case finishedAt = "finished_at"
+        case cancelRequestedAt = "cancel_requested_at"
+    }
+}
+
+struct DailySummaryJobCancelInput: Encodable {
+    var jobID: String
+
+    private enum CodingKeys: String, CodingKey {
+        case jobID = "job_id"
+    }
+}
+
+struct DailySummaryRunInput: Encodable {
+    var packageRunID: String?
+    var date: String?
+    var timezone: String?
+    var scope: JSONValue?
+    var accountID: String?
+    var originID: Int?
+    var topicID: Int?
+    var tags: String?
+    var tagGroups: [String]?
+    var background: Bool
+}
+
+struct DailySummaryRecord: Decodable, Identifiable, Hashable {
+    var summaryID: String
+    var runID: String
+    var packageRunID: String?
+    var date: String?
+    var timezone: String?
+    var scope: JSONValue?
+    var tags: [String]?
+    var tagsCSV: String?
+    var important: Bool?
+    var provider: String?
+    var title: String?
+    var contentPreview: String
+    var contentMD: String?
+    var contentJSON: JSONValue?
+    var summaryPath: String?
+    var originCount: Int?
+    var groupCount: Int?
+    var imageCount: Int?
+    var contentLength: Int?
+    var deleted: Bool?
+    var deletedAt: String?
+    var createdAt: String?
+    var updatedAt: String?
+
+    var id: String { summaryID }
+
+    private enum CodingKeys: String, CodingKey {
+        case summaryID = "summary_id"
+        case runID = "run_id"
+        case packageRunID = "package_run_id"
+        case date
+        case timezone
+        case scope
+        case tags
+        case tagsCSV = "tags_csv"
+        case important
+        case provider
+        case title
+        case contentPreview = "content_preview"
+        case contentMD = "content_md"
+        case contentJSON = "content_json"
+        case summaryPath = "summary_path"
+        case originCount = "origin_count"
+        case groupCount = "group_count"
+        case imageCount = "image_count"
+        case contentLength = "content_length"
+        case deleted
+        case deletedAt = "deleted_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct DailySummaryRecordDeleteInput: Encodable {
+    var summaryID: String?
+    var ids: [String]?
+    var summaryIDs: [String]?
+    var deleted: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case summaryID = "summary_id"
+        case ids
+        case summaryIDs = "summary_ids"
+        case deleted
+    }
+}
+
+struct DailySummaryRecordDeleteResult: Decodable, Hashable {
+    var summaryIDs: [String]
+    var deleted: Bool
+    var changedRows: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case summaryIDs = "summary_ids"
+        case deleted
+        case changedRows = "changed_rows"
+    }
+}
+
+struct OperationEventDeleteResult: Decodable, Hashable {
+    var ids: [Int]
+    var deleted: Int
 }
 
 struct DeleteResult: Decodable, Hashable {
@@ -593,10 +1065,13 @@ struct ArchiveOriginResult: Decodable, Hashable {
 struct AuthOperationResult: Decodable, Hashable {
     var source: String?
     var accountID: String?
+    var authorized: Bool?
     var authState: String?
     var status: String?
     var phone: String?
     var message: String?
+    var requiresPassword: Bool?
+    var phoneCodeHash: String?
     var lastError: String?
     var code: String?
     var detail: String?
@@ -604,10 +1079,13 @@ struct AuthOperationResult: Decodable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case source
         case accountID = "account_id"
+        case authorized
         case authState = "auth_state"
         case status
         case phone
         case message
+        case requiresPassword = "requires_password"
+        case phoneCodeHash = "phone_code_hash"
         case lastError = "last_error"
         case code
         case detail
@@ -617,20 +1095,32 @@ struct AuthOperationResult: Decodable, Hashable {
 struct DiscoveryResult: Decodable, Hashable {
     var source: String?
     var accountID: String?
+    var authorized: Bool?
     var discovered: Int?
     var origins: Int?
     var topics: Int?
-    var skippedPrivate: Int?
+    var privateSkipped: Int?
+    var errors: [JSONValue]?
+    var topicsTruncated: Bool?
+    var topicLimit: Int?
+    var includePrivate: Bool?
     var status: String?
     var message: String?
+
+    var skippedPrivate: Int? { privateSkipped }
 
     private enum CodingKeys: String, CodingKey {
         case source
         case accountID = "account_id"
+        case authorized
         case discovered
         case origins
         case topics
-        case skippedPrivate = "skipped_private"
+        case privateSkipped = "private_skipped"
+        case errors
+        case topicsTruncated = "topics_truncated"
+        case topicLimit = "topic_limit"
+        case includePrivate = "include_private"
         case status
         case message
     }
@@ -640,15 +1130,25 @@ struct ParticipantRefreshResult: Decodable, Hashable {
     var source: String?
     var accountID: String?
     var originID: Int?
-    var refreshed: Int?
+    var authorized: Bool?
+    var participants: Int?
+    var errors: [JSONValue]?
+    var participantsTruncated: Bool?
+    var limit: Int?
     var status: String?
     var message: String?
+
+    var refreshed: Int? { participants }
 
     private enum CodingKeys: String, CodingKey {
         case source
         case accountID = "account_id"
         case originID = "origin_id"
-        case refreshed
+        case authorized
+        case participants
+        case errors
+        case participantsTruncated = "participants_truncated"
+        case limit
         case status
         case message
     }
@@ -657,6 +1157,8 @@ struct ParticipantRefreshResult: Decodable, Hashable {
 struct CreateAccountRequest: Encodable {
     var accountID: String
     var displayName: String?
+    var kind: String? = nil
+    var authState: String? = nil
     var phone: String?
     var sessionName: String?
     var sessionDir: String?
@@ -666,6 +1168,7 @@ struct CreateAccountRequest: Encodable {
 struct AccountAuthUpdateRequest: Encodable {
     var accountID: String
     var authState: String
+    var status: String?
     var phone: String?
     var sessionName: String?
     var sessionDir: String?
@@ -698,7 +1201,8 @@ struct DeleteAccountRequest: Encodable {
 }
 
 struct DeleteOperationEventRequest: Encodable {
-    var id: Int
+    var id: Int?
+    var ids: [Int]? = nil
 }
 
 struct DiscoverOriginsRequest: Encodable {
@@ -717,11 +1221,47 @@ struct ArchiveOriginRequest: Encodable {
     var source: String = "telegram"
 }
 
+struct OriginImportantRequest: Encodable {
+    var accountID: String
+    var originID: Int
+    var topicID: Int = 0
+    var important: Bool
+    var source: String = "telegram"
+}
+
 struct DeleteOriginRequest: Encodable {
     var accountID: String
     var originID: Int
     var topicID: Int = 0
     var source: String = "telegram"
+}
+
+struct OriginUpdateRequest: Encodable {
+    var accountID: String
+    var originID: Int
+    var topicID: Int = 0
+    var originType: String
+    var parentOriginID: Int?
+    var title: String?
+    var username: String?
+    var isForum: Bool?
+    var lastMessageAt: String?
+    var important: Bool?
+    var source: String = "telegram"
+
+    init(origin: CoreOrigin, important: Bool? = nil) {
+        accountID = origin.accountID
+        originID = origin.originID
+        topicID = origin.topicID
+        originType = origin.originType
+        parentOriginID = origin.parentOriginID
+        title = origin.title
+        username = origin.username
+        isForum = origin.isForum
+        lastMessageAt = origin.lastMessageAt
+        self.important = important
+        source = origin.source
+    }
 }
 
 struct BackupPolicyRequest: Encodable {
@@ -747,6 +1287,18 @@ struct RefreshParticipantsRequest: Encodable {
     var accountID: String
     var originID: Int
     var limit: Int = 500
+    var source: String = "telegram"
+}
+
+struct ParticipantRequest: Encodable {
+    var accountID: String
+    var originID: Int
+    var userID: Int
+    var username: String?
+    var displayName: String?
+    var isBot: Bool?
+    var role: String?
+    var lastSeenAt: String?
     var source: String = "telegram"
 }
 

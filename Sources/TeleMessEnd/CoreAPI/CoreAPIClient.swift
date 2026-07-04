@@ -44,25 +44,58 @@ struct CoreAPIClient: Sendable {
         try await send("GET", path: "/manage/capabilities")
     }
 
-    func fetchRecentMessages(limit: Int = 100) async throws -> CorePage<CoreMessage> {
-        try await send("GET", path: "/sync/messages", query: [
-            URLQueryItem(name: "latest", value: "true"),
-            URLQueryItem(name: "limit", value: String(limit))
-        ])
+    func fetchAPIManifest() async throws -> CoreAPIManifest {
+        try await send("GET", path: "/manage/api-manifest")
     }
 
-    func fetchMessages(after cursor: Int, limit: Int = 500) async throws -> CorePage<CoreMessage> {
-        try await send("GET", path: "/sync/messages", query: [
+    func fetchEvents(after cursor: Int = 0, limit: Int = 500) async throws -> CorePage<CoreEvent> {
+        try await send("GET", path: "/sync/events", query: [
             URLQueryItem(name: "after", value: String(cursor)),
             URLQueryItem(name: "limit", value: String(limit))
         ])
     }
 
-    func searchMessages(query: String, limit: Int = 50) async throws -> [CoreMessage] {
-        let response: CoreItemsResponse<CoreMessage> = try await send("GET", path: "/sync/search", query: [
+    func fetchRecentMessages(limit: Int = 100, includeMedia: Bool = false) async throws -> CorePage<CoreMessage> {
+        var query = [
+            URLQueryItem(name: "latest", value: "true"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if includeMedia {
+            query.append(URLQueryItem(name: "include_media", value: "true"))
+        }
+        return try await send("GET", path: "/sync/messages", query: query)
+    }
+
+    func fetchMessages(after cursor: Int, limit: Int = 500, includeMedia: Bool = false) async throws -> CorePage<CoreMessage> {
+        var query = [
+            URLQueryItem(name: "after", value: String(cursor)),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if includeMedia {
+            query.append(URLQueryItem(name: "include_media", value: "true"))
+        }
+        return try await send("GET", path: "/sync/messages", query: query)
+    }
+
+    func listSyncAccounts() async throws -> [CoreAccount] {
+        let response: CoreItemsResponse<CoreAccount> = try await send("GET", path: "/sync/accounts")
+        return response.items
+    }
+
+    func listChats() async throws -> [CoreChat] {
+        let response: CoreItemsResponse<CoreChat> = try await send("GET", path: "/sync/chats")
+        return response.items
+    }
+
+    func searchMessages(query: String, limit: Int = 50, includeMedia: Bool = false) async throws -> [CoreMessage] {
+        var queryItems = [
             URLQueryItem(name: "q", value: query),
             URLQueryItem(name: "limit", value: String(limit))
-        ])
+        ]
+        if includeMedia {
+            queryItems.append(URLQueryItem(name: "include_media", value: "true"))
+        }
+        let response: CoreItemsResponse<CoreMessage> = try await send("GET", path: "/sync/search", query: queryItems)
         return response.items
     }
 
@@ -73,6 +106,11 @@ struct CoreAPIClient: Sendable {
 
     func createAccount(_ request: CreateAccountRequest) async throws -> CoreAccount {
         let response: CoreWriteResponse<CoreAccount> = try await send("POST", path: "/manage/accounts", body: request)
+        return response.item
+    }
+
+    func updateAccountAuth(_ request: AccountAuthUpdateRequest, patch: Bool = true) async throws -> CoreAccount {
+        let response: CoreWriteResponse<CoreAccount> = try await send(patch ? "PATCH" : "POST", path: "/manage/accounts/auth", body: request)
         return response.item
     }
 
@@ -135,8 +173,18 @@ struct CoreAPIClient: Sendable {
         return response.item
     }
 
+    func updateOrigin(_ request: OriginUpdateRequest) async throws -> CoreOrigin {
+        let response: CoreWriteResponse<CoreOrigin> = try await send("POST", path: "/manage/origins", body: request)
+        return response.item
+    }
+
     func archiveOrigin(_ request: ArchiveOriginRequest) async throws -> ArchiveOriginResult {
         let response: CoreWriteResponse<ArchiveOriginResult> = try await send("PATCH", path: "/manage/origins/archive", body: request)
+        return response.item
+    }
+
+    func setOriginImportant(_ request: OriginImportantRequest) async throws -> CoreOrigin {
+        let response: CoreWriteResponse<CoreOrigin> = try await send("PATCH", path: "/manage/origins/important", body: request)
         return response.item
     }
 
@@ -155,7 +203,7 @@ struct CoreAPIClient: Sendable {
     }
 
     func setBackupPolicy(_ request: BackupPolicyRequest) async throws -> CoreBackupPolicy {
-        let response: CoreWriteResponse<CoreBackupPolicy> = try await send("PATCH", path: "/manage/backup-policies", body: request)
+        let response: CoreWriteResponse<CoreBackupPolicy> = try await send("POST", path: "/manage/backup-policies", body: request)
         return response.item
     }
 
@@ -185,6 +233,16 @@ struct CoreAPIClient: Sendable {
         return response.item
     }
 
+    func createParticipant(_ request: ParticipantRequest) async throws -> CoreParticipant {
+        let response: CoreWriteResponse<CoreParticipant> = try await send("POST", path: "/manage/participants", body: request)
+        return response.item
+    }
+
+    func deleteParticipant(_ request: ParticipantRequest) async throws -> DeleteResult {
+        let response: CoreWriteResponse<DeleteResult> = try await send("DELETE", path: "/manage/participants", body: request)
+        return response.item
+    }
+
     func listCaptureCursors(accountID: String? = nil) async throws -> [CoreCaptureCursor] {
         var query: [URLQueryItem] = []
         if let accountID, !accountID.isEmpty {
@@ -206,11 +264,192 @@ struct CoreAPIClient: Sendable {
         return response.items
     }
 
-    func deleteOperationEvent(id: Int) async throws -> DeleteResult {
-        let response: CoreWriteResponse<DeleteResult> = try await send(
+    func deleteOperationEvent(id: Int) async throws -> OperationEventDeleteResult {
+        let response: CoreWriteResponse<OperationEventDeleteResult> = try await send(
             "DELETE",
             path: "/manage/operation-events",
             body: DeleteOperationEventRequest(id: id)
+        )
+        return response.item
+    }
+
+    func deleteOperationEvents(ids: [Int]) async throws -> OperationEventDeleteResult {
+        let response: CoreWriteResponse<OperationEventDeleteResult> = try await send(
+            "DELETE",
+            path: "/manage/operation-events",
+            body: DeleteOperationEventRequest(id: nil, ids: ids)
+        )
+        return response.item
+    }
+
+    func fetchDailyPackageSchedule() async throws -> DailyPackageSchedule {
+        let response: CoreWriteResponse<DailyPackageSchedule> = try await send("GET", path: "/manage/daily-package-schedule")
+        return response.item
+    }
+
+    func updateDailyPackageSchedule(_ request: DailyPackageScheduleInput) async throws -> DailyPackageSchedule {
+        let response: CoreWriteResponse<DailyPackageSchedule> = try await send("PATCH", path: "/manage/daily-package-schedule", body: request)
+        return response.item
+    }
+
+    func runDailyPackage(_ request: DailyPackageRunInput) async throws -> DailyPackageRun {
+        let response: CoreWriteResponse<DailyPackageRun> = try await send("POST", path: "/manage/daily-packages", body: request)
+        return response.item
+    }
+
+    func listDailyPackageRuns(status: String? = nil, limit: Int = 100) async throws -> [DailyPackageRun] {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let status, !status.isEmpty {
+            query.append(URLQueryItem(name: "status", value: status))
+        }
+        let response: CoreItemsResponse<DailyPackageRun> = try await send("GET", path: "/manage/daily-package-runs", query: query)
+        return response.items
+    }
+
+    func fetchDailyPackageRunContent(runID: String, format: String = "md") async throws -> String {
+        try await text("GET", path: "/manage/daily-package-runs/content", query: [
+            URLQueryItem(name: "run_id", value: runID),
+            URLQueryItem(name: "format", value: format)
+        ])
+    }
+
+    func runDailySummary(_ request: DailySummaryRunInput) async throws -> DailySummaryRun {
+        let response: CoreWriteResponse<DailySummaryRun> = try await send("POST", path: "/manage/daily-summaries", body: request)
+        return response.item
+    }
+
+    func listDailySummaryRuns(packageRunID: String? = nil, status: String? = nil, limit: Int = 100) async throws -> [DailySummaryRun] {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let packageRunID, !packageRunID.isEmpty {
+            query.append(URLQueryItem(name: "package_run_id", value: packageRunID))
+        }
+        if let status, !status.isEmpty {
+            query.append(URLQueryItem(name: "status", value: status))
+        }
+        let response: CoreItemsResponse<DailySummaryRun> = try await send("GET", path: "/manage/daily-summary-runs", query: query)
+        return response.items
+    }
+
+    func fetchDailySummaryRunContent(runID: String) async throws -> String {
+        try await text("GET", path: "/manage/daily-summary-runs/content", query: [
+            URLQueryItem(name: "run_id", value: runID)
+        ])
+    }
+
+    func runDailySummaryJob(_ request: DailySummaryRunInput) async throws -> DailySummaryJob {
+        let response: CoreWriteResponse<DailySummaryJob> = try await send("POST", path: "/manage/daily-summary-jobs", body: request)
+        return response.item
+    }
+
+    func listDailySummaryJobs(jobID: String? = nil, status: String? = nil, limit: Int = 100) async throws -> [DailySummaryJob] {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let jobID, !jobID.isEmpty {
+            query.append(URLQueryItem(name: "job_id", value: jobID))
+        }
+        if let status, !status.isEmpty {
+            query.append(URLQueryItem(name: "status", value: status))
+        }
+        let response: CoreItemsResponse<DailySummaryJob> = try await send("GET", path: "/manage/daily-summary-jobs", query: query)
+        return response.items
+    }
+
+    func cancelDailySummaryJob(jobID: String) async throws -> DailySummaryJob {
+        let response: CoreWriteResponse<DailySummaryJob> = try await send(
+            "PATCH",
+            path: "/manage/daily-summary-jobs/cancel",
+            body: DailySummaryJobCancelInput(jobID: jobID)
+        )
+        return response.item
+    }
+
+    func listDailySummaryRecords(
+        summaryID: String? = nil,
+        runID: String? = nil,
+        packageRunID: String? = nil,
+        date: String? = nil,
+        dateFrom: String? = nil,
+        dateTo: String? = nil,
+        provider: String? = nil,
+        important: Bool? = nil,
+        tag: String? = nil,
+        tags: String? = nil,
+        query searchText: String? = nil,
+        includeDeleted: Bool = false,
+        deleted: Bool? = nil,
+        includeContent: Bool = false,
+        limit: Int = 100
+    ) async throws -> [DailySummaryRecord] {
+        var query = [
+            URLQueryItem(name: "include_deleted", value: includeDeleted ? "true" : "false"),
+            URLQueryItem(name: "include_content", value: includeContent ? "true" : "false"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if let summaryID, !summaryID.isEmpty {
+            query.append(URLQueryItem(name: "summary_id", value: summaryID))
+        }
+        if let runID, !runID.isEmpty {
+            query.append(URLQueryItem(name: "run_id", value: runID))
+        }
+        if let packageRunID, !packageRunID.isEmpty {
+            query.append(URLQueryItem(name: "package_run_id", value: packageRunID))
+        }
+        if let date, !date.isEmpty {
+            query.append(URLQueryItem(name: "date", value: date))
+        }
+        if let dateFrom, !dateFrom.isEmpty {
+            query.append(URLQueryItem(name: "date_from", value: dateFrom))
+        }
+        if let dateTo, !dateTo.isEmpty {
+            query.append(URLQueryItem(name: "date_to", value: dateTo))
+        }
+        if let provider, !provider.isEmpty {
+            query.append(URLQueryItem(name: "provider", value: provider))
+        }
+        if let important {
+            query.append(URLQueryItem(name: "important", value: important ? "true" : "false"))
+        }
+        if let tag, !tag.isEmpty {
+            query.append(URLQueryItem(name: "tag", value: tag))
+        }
+        if let tags, !tags.isEmpty {
+            query.append(URLQueryItem(name: "tags", value: tags))
+        }
+        if let searchText, !searchText.isEmpty {
+            query.append(URLQueryItem(name: "q", value: searchText))
+        }
+        if let deleted {
+            query.append(URLQueryItem(name: "deleted", value: deleted ? "true" : "false"))
+        }
+        let response: CoreItemsResponse<DailySummaryRecord> = try await send("GET", path: "/manage/daily-summary-records", query: query)
+        return response.items
+    }
+
+    func fetchDailySummaryRecord(summaryID: String? = nil, runID: String? = nil, includeDeleted: Bool = false) async throws -> DailySummaryRecord {
+        var query = [URLQueryItem(name: "include_deleted", value: includeDeleted ? "true" : "false")]
+        if let summaryID, !summaryID.isEmpty {
+            query.append(URLQueryItem(name: "summary_id", value: summaryID))
+        }
+        if let runID, !runID.isEmpty {
+            query.append(URLQueryItem(name: "run_id", value: runID))
+        }
+        let response: CoreWriteResponse<DailySummaryRecord> = try await send("GET", path: "/manage/daily-summary-records/item", query: query)
+        return response.item
+    }
+
+    func deleteDailySummaryRecords(summaryIDs: [String]) async throws -> DailySummaryRecordDeleteResult {
+        let response: CoreWriteResponse<DailySummaryRecordDeleteResult> = try await send(
+            "DELETE",
+            path: "/manage/daily-summary-records",
+            body: DailySummaryRecordDeleteInput(summaryID: nil, ids: nil, summaryIDs: summaryIDs, deleted: true)
+        )
+        return response.item
+    }
+
+    func restoreDailySummaryRecords(summaryIDs: [String]) async throws -> DailySummaryRecordDeleteResult {
+        let response: CoreWriteResponse<DailySummaryRecordDeleteResult> = try await send(
+            "PATCH",
+            path: "/manage/daily-summary-records",
+            body: DailySummaryRecordDeleteInput(summaryID: nil, ids: nil, summaryIDs: summaryIDs, deleted: false)
         )
         return response.item
     }
@@ -230,6 +469,26 @@ struct CoreAPIClient: Sendable {
         return response.items
     }
 
+    func downloadMediaContent(source: String = "telegram", accountID: String, chatID: Int, messageID: Int, fileIndex: Int = 0) async throws -> Data {
+        try await data("GET", path: "/sync/media-files/content", query: [
+            URLQueryItem(name: "source", value: source),
+            URLQueryItem(name: "account_id", value: accountID),
+            URLQueryItem(name: "chat_id", value: String(chatID)),
+            URLQueryItem(name: "message_id", value: String(messageID)),
+            URLQueryItem(name: "file_index", value: String(fileIndex))
+        ])
+    }
+
+    func downloadMediaContent(for file: CoreMediaFile) async throws -> Data {
+        try await downloadMediaContent(
+            source: file.source,
+            accountID: file.accountID,
+            chatID: file.chatID,
+            messageID: file.messageID,
+            fileIndex: file.fileIndex
+        )
+    }
+
     private func send<Response: Decodable>(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> Response {
         try await send(method, path: path, query: query, body: Optional<String>.none)
     }
@@ -240,17 +499,7 @@ struct CoreAPIClient: Sendable {
         query: [URLQueryItem] = [],
         body: Body?
     ) async throws -> Response {
-        var request = URLRequest(url: try makeURL(path: path, query: query))
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let token = try tokenProvider.token(), !token.isEmpty {
-            switch authMode {
-            case .bearer:
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            case .apiToken:
-                request.setValue(token, forHTTPHeaderField: "X-Api-Token")
-            }
-        }
+        var request = try makeRequest(method, path: path, query: query)
         if let body {
             request.httpBody = try JSONEncoder.core.encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -271,6 +520,58 @@ struct CoreAPIClient: Sendable {
         } catch {
             throw CoreAPIError.transport(error.localizedDescription)
         }
+    }
+
+    private func data(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> Data {
+        let request = try makeRequest(method, path: path, query: query, accept: "application/octet-stream")
+        do {
+            let (data, response) = try await transport.data(for: request)
+            guard (200..<300).contains(response.statusCode) else {
+                let payload = try? JSONDecoder.core.decode(CoreAPIErrorPayload.self, from: data)
+                let detail = payload?.detail ?? payload?.message ?? payload?.error ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+                throw CoreAPIError.httpStatus(response.statusCode, detail)
+            }
+            return data
+        } catch let error as CoreAPIError {
+            throw error
+        } catch {
+            throw CoreAPIError.transport(error.localizedDescription)
+        }
+    }
+
+    private func text(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> String {
+        let request = try makeRequest(method, path: path, query: query, accept: "text/markdown")
+        do {
+            let (data, response) = try await transport.data(for: request)
+            guard (200..<300).contains(response.statusCode) else {
+                let payload = try? JSONDecoder.core.decode(CoreAPIErrorPayload.self, from: data)
+                let detail = payload?.detail ?? payload?.message ?? payload?.error ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+                throw CoreAPIError.httpStatus(response.statusCode, detail)
+            }
+            guard let value = String(data: data, encoding: .utf8) else {
+                throw CoreAPIError.invalidResponse
+            }
+            return value
+        } catch let error as CoreAPIError {
+            throw error
+        } catch {
+            throw CoreAPIError.transport(error.localizedDescription)
+        }
+    }
+
+    private func makeRequest(_ method: String, path: String, query: [URLQueryItem], accept: String = "application/json") throws -> URLRequest {
+        var request = URLRequest(url: try makeURL(path: path, query: query))
+        request.httpMethod = method
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        if let token = try tokenProvider.token(), !token.isEmpty {
+            switch authMode {
+            case .bearer:
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            case .apiToken:
+                request.setValue(token, forHTTPHeaderField: "X-Api-Token")
+            }
+        }
+        return request
     }
 
     private func makeURL(path: String, query: [URLQueryItem]) throws -> URL {

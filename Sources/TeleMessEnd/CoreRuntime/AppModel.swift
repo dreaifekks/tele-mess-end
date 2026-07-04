@@ -9,6 +9,51 @@ struct DashboardState {
     var operationEvents: [CoreOperationEvent] = []
 }
 
+private struct CachedProfileToken {
+    var profileID: UUID
+    var token: String?
+}
+
+private let recentMessageRefreshIntervalNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
+
+private enum TokenReadMode {
+    case promptIfNeeded
+    case cacheOnly
+}
+
+private let hiddenDailySummaryIDsKey = "TeleMessEnd.hiddenDailySummaryIDs"
+
+enum CoreValidationStatus {
+    case unverified
+    case validating
+    case verified
+    case failed
+
+    var title: String {
+        switch self {
+        case .unverified:
+            "Unverified"
+        case .validating:
+            "Validating"
+        case .verified:
+            "Verified"
+        case .failed:
+            "Failed"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .unverified, .failed:
+            "xmark.seal"
+        case .validating:
+            "clock"
+        case .verified:
+            "checkmark.seal"
+        }
+    }
+}
+
 enum DiagnosticsSection: String, CaseIterable, Identifiable {
     case operationEvents
     case participants
@@ -35,8 +80,12 @@ enum DiagnosticsSection: String, CaseIterable, Identifiable {
 @Observable
 final class AppModel {
     let profileStore: CoreProfileStore
+    let summarySettingsStore: SummarySettingsStore
+    let originImportanceStore: OriginImportanceStore
     let keychain = KeychainStore()
     let localRunner = LocalCoreProcessController()
+    @ObservationIgnored private var tokenCache: CachedProfileToken?
+    @ObservationIgnored private var isRecentMessageRefreshLoopRunning = false
 
     var selectedSection: AppSection = .dashboard
     var dashboard = DashboardState()
@@ -47,10 +96,17 @@ final class AppModel {
     var cursors: [CoreCaptureCursor] = []
     var mediaFiles: [CoreMediaFile] = []
     var operationEvents: [CoreOperationEvent] = []
+    var dailySummaries: [DailyGroupSummary] = []
+    var dailySummaryRecords: [DailySummaryRecord] = []
+    var dailyPackageRuns: [DailyPackageRun] = []
+    var dailySummaryRuns: [DailySummaryRun] = []
+    var dailySummaryJobs: [DailySummaryJob] = []
+    var hiddenDailySummaryIDs: Set<String> = []
 
     var isLoading = false
     var statusMessage = "Ready"
     var lastError: String?
+    var validationStatus: CoreValidationStatus = .unverified
 
     var originSearch = ""
     var originAccountFilter = ""
@@ -67,18 +123,43 @@ final class AppModel {
     var diagnosticsAccountFilter = ""
     var diagnosticsOriginIDFilter = ""
     var diagnosticsStatusFilter = "failed"
+    var mediaAccountFilter = ""
+    var mediaChatIDFilter = ""
+    var mediaMessageIDFilter = ""
+    var includeDeletedDailySummaryRecords = false
 
-    init(profileStore: CoreProfileStore? = nil) {
+    init(
+        profileStore: CoreProfileStore? = nil,
+        summarySettingsStore: SummarySettingsStore? = nil,
+        originImportanceStore: OriginImportanceStore? = nil
+    ) {
         self.profileStore = profileStore ?? CoreProfileStore()
+        self.summarySettingsStore = summarySettingsStore ?? SummarySettingsStore()
+        self.originImportanceStore = originImportanceStore ?? OriginImportanceStore()
+        self.hiddenDailySummaryIDs = Set(UserDefaults.standard.stringArray(forKey: hiddenDailySummaryIDsKey) ?? [])
     }
 
     var selectedProfile: CoreProfile? {
         profileStore.selectedProfile
     }
 
+    func selectProfile(_ id: UUID?) {
+        profileStore.select(id)
+        tokenCache = nil
+        validationStatus = .unverified
+    }
+
     var selectedOrigin: CoreOrigin? {
         guard let selectedOriginID else { return nil }
         return origins.first { $0.id == selectedOriginID }
+    }
+
+    var activeDailySummaryJob: DailySummaryJob? {
+        dailySummaryJobs.first { $0.isActive }
+    }
+
+    var latestDailySummaryJob: DailySummaryJob? {
+        activeDailySummaryJob ?? dailySummaryJobs.first
     }
 
     var matchingOrigins: [CoreOrigin] {
@@ -135,33 +216,65 @@ final class AppModel {
             await loadOrigins()
         case .messages:
             await loadRecentMessages()
+        case .media:
+            await loadMediaFiles()
+        case .summaries:
+            await loadDailySummaries()
         case .diagnostics:
             await loadDiagnostics()
         }
     }
 
-    func validateActiveProfile() async {
-        await withLoading("Validating profile") {
-            let client = try makeClient()
-            _ = try await client.health()
-            dashboard.coreState = try await client.fetchSyncState()
-            dashboard.capabilities = try await client.fetchCapabilities()
-            statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
+    func runRecentMessageRefreshLoop() async {
+        guard !isRecentMessageRefreshLoopRunning else { return }
+        isRecentMessageRefreshLoopRunning = true
+        defer { isRecentMessageRefreshLoopRunning = false }
+
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: recentMessageRefreshIntervalNanoseconds)
+            guard !Task.isCancelled else { return }
+            await refreshRecentMessagesInBackground()
         }
     }
 
-    func loadDashboard() async {
-        await withLoading("Loading dashboard") {
+    func validateActiveProfile() async {
+        validationStatus = .validating
+        await withLoading("Validating profile") {
             let client = try makeClient()
-            async let state = client.fetchSyncState()
-            async let capabilities = client.fetchCapabilities()
-            async let messages = client.fetchRecentMessages(limit: 100)
-            async let events = client.listOperationEvents(status: "failed", limit: 100)
-            dashboard.coreState = try await state
-            dashboard.capabilities = try await capabilities
-            dashboard.recentMessages = try await messages.items
-            dashboard.operationEvents = try await events
+            _ = try await client.health()
+            try await reloadDashboard(using: client)
+            validationStatus = .verified
+            statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
+        }
+        if lastError != nil {
+            validationStatus = .failed
+        }
+    }
+
+    func loadDashboard(allowKeychainUI: Bool = true) async {
+        let tokenReadMode: TokenReadMode = allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        if tokenReadMode == .cacheOnly && !hasCachedTokenForSelectedProfile {
+            return
+        }
+
+        await withLoading("Loading dashboard") {
+            let client = try makeClient(tokenReadMode: tokenReadMode)
+            try await reloadDashboard(using: client)
             statusMessage = "Dashboard refreshed"
+        }
+    }
+
+    func refreshRecentMessagesInBackground() async {
+        guard !isLoading else { return }
+        guard hasCachedTokenForSelectedProfile else { return }
+        do {
+            let messages = try await fetchRecentMessages(tokenReadMode: .cacheOnly)
+            dashboard.recentMessages = messages
+            if messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.messages = messages
+            }
+        } catch {
+            return
         }
     }
 
@@ -214,7 +327,7 @@ final class AppModel {
 
     func loadOrigins() async {
         await withLoading("Loading origins") {
-            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins))
             if selectedOriginID == nil {
                 selectedOriginID = origins.first?.id
             }
@@ -225,8 +338,19 @@ final class AppModel {
     func discoverOrigins(accountID: String) async {
         await withLoading("Discovering origins") {
             let result = try await makeClient().discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
-            origins = try await makeClient().listOrigins(accountID: accountID, includeArchived: includeArchivedOrigins)
+            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: accountID, includeArchived: includeArchivedOrigins))
             statusMessage = result.message ?? "Discovery finished"
+        }
+    }
+
+    func loadSummaryScopeOptions() async {
+        await withLoading("Loading summary scope options") {
+            let client = try makeClient()
+            async let loadedAccounts = client.listManagementAccounts()
+            async let loadedOrigins = client.listOrigins(accountID: nil, includeArchived: false)
+            accounts = try await loadedAccounts
+            origins = originImportanceStore.apply(to: try await loadedOrigins)
+            statusMessage = "Loaded summary scope options"
         }
     }
 
@@ -251,7 +375,7 @@ final class AppModel {
                     )
                 )
             }
-            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins))
             statusMessage = archived ? "Origin archived" : "Origin restored"
         }
     }
@@ -284,14 +408,43 @@ final class AppModel {
                     )
                 )
             }
-            origins = try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins)
+            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins))
             statusMessage = "Policy saved"
         }
     }
 
+    func setOriginImportant(_ origin: CoreOrigin, important: Bool) async {
+        let previousImportant = origin.important
+        updateOriginImportantLocally(origin, important: important)
+        isLoading = true
+        lastError = nil
+        statusMessage = important ? "Marking important" : "Clearing important"
+        do {
+            let updated = try await makeClient().setOriginImportant(
+                OriginImportantRequest(
+                    accountID: origin.accountID,
+                    originID: origin.originID,
+                    topicID: origin.topicID,
+                    important: important,
+                    source: origin.source
+                )
+            )
+            originImportanceStore.set(nil, for: origin)
+            replaceOrigin(updated)
+            statusMessage = important ? "Origin marked important" : "Origin unmarked"
+        } catch {
+            lastError = error.localizedDescription
+            updateOriginImportantLocally(origin, important: previousImportant)
+            statusMessage = "Failed"
+        }
+        isLoading = false
+    }
+
     func loadRecentMessages() async {
         await withLoading("Loading messages") {
-            messages = try await makeClient().fetchRecentMessages(limit: 100).items
+            let recentMessages = try await fetchRecentMessages()
+            messages = recentMessages
+            dashboard.recentMessages = recentMessages
             statusMessage = "Loaded recent messages"
         }
     }
@@ -303,8 +456,193 @@ final class AppModel {
             return
         }
         await withLoading("Searching messages") {
-            messages = try await makeClient().searchMessages(query: query, limit: 100)
+            messages = try await makeClient().searchMessages(query: query, limit: 100, includeMedia: true)
             statusMessage = "Search returned \(messages.count) messages"
+        }
+    }
+
+    func loadMediaFiles() async {
+        await withLoading("Loading media") {
+            mediaFiles = try await makeClient().listMediaFiles(
+                accountID: mediaAccountFilter.nilIfEmpty,
+                chatID: Int(mediaChatIDFilter),
+                messageID: Int(mediaMessageIDFilter),
+                limit: 500
+            )
+            statusMessage = "Loaded \(mediaFiles.count) media files"
+        }
+    }
+
+    func showMedia(for message: CoreMessage) async {
+        mediaAccountFilter = message.accountID
+        mediaChatIDFilter = String(message.chatID)
+        mediaMessageIDFilter = String(message.messageID)
+        selectedSection = .media
+        await loadMediaFiles()
+    }
+
+    func openMediaFile(_ file: CoreMediaFile) async {
+        await withLoading("Opening media") {
+            let data = try await makeClient().downloadMediaContent(for: file)
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TeleMessEndMedia", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(file.suggestedFilename)
+            try data.write(to: url, options: .atomic)
+            NSWorkspace.shared.open(url)
+            statusMessage = "Opened \(file.suggestedFilename)"
+        }
+    }
+
+    func fetchMediaContent(_ file: CoreMediaFile) async throws -> Data {
+        try await makeClient().downloadMediaContent(for: file)
+    }
+
+    func saveSummarySettings(_ settings: SummarySettings) {
+        summarySettingsStore.save(settings)
+        statusMessage = "Summary settings saved"
+        lastError = nil
+    }
+
+    func loadSummarySchedule() async {
+        await withLoading("Loading summary schedule") {
+            let schedule = try await makeClient().fetchDailyPackageSchedule()
+            summarySettingsStore.save(SummarySettings(schedule: schedule))
+            statusMessage = schedule.enabled ? "Summary schedule enabled" : "Summary schedule loaded"
+        }
+    }
+
+    func saveSummarySchedule(_ settings: SummarySettings) async {
+        await withLoading("Saving summary schedule") {
+            let schedule = try await makeClient().updateDailyPackageSchedule(settings.scheduleInput)
+            summarySettingsStore.save(SummarySettings(schedule: schedule))
+            statusMessage = "Summary schedule saved"
+        }
+    }
+
+    func loadDailySummaries() async {
+        await withLoading("Loading daily summaries") {
+            let settings = summarySettingsStore.settings
+            let client = try makeClient()
+            try await reloadDailySummaryState(using: client, settings: settings)
+            statusMessage = "Loaded \(dailySummaryRecords.count) summary records"
+        }
+    }
+
+    func runDailyPackageAndSummary() async {
+        await withLoading("Starting daily analysis") {
+            let client = try makeClient()
+            let job = try await client.runDailySummaryJob(summarySettingsStore.settings.summaryRunInput)
+            dailySummaryJobs = upsertDailySummaryJob(job, into: dailySummaryJobs)
+            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+            statusMessage = "Daily analysis \(job.status)"
+        }
+    }
+
+    func refreshDailySummaryProgress() async {
+        await withLoading("Refreshing daily analysis") {
+            let client = try makeClient()
+            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+            if let job = latestDailySummaryJob {
+                statusMessage = "Daily analysis \(job.status)"
+            } else {
+                statusMessage = "Daily analysis refreshed"
+            }
+        }
+    }
+
+    func cancelDailySummaryJob(_ job: DailySummaryJob? = nil) async {
+        guard let target = job ?? activeDailySummaryJob ?? latestDailySummaryJob else {
+            statusMessage = "No daily analysis job to cancel"
+            lastError = nil
+            return
+        }
+
+        await withLoading("Cancelling daily analysis") {
+            let client = try makeClient()
+            let cancelled = try await client.cancelDailySummaryJob(jobID: target.jobID)
+            dailySummaryJobs = upsertDailySummaryJob(cancelled, into: dailySummaryJobs)
+            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+            statusMessage = "Daily analysis \(cancelled.status)"
+        }
+    }
+
+    func runDailyPackage() async {
+        await withLoading("Generating daily package") {
+            let run = try await makeClient().runDailyPackage(summarySettingsStore.settings.packageRunInput)
+            dailyPackageRuns.insert(run, at: 0)
+            statusMessage = "Daily package \(run.status)"
+        }
+    }
+
+    func runDailySummary() async {
+        await withLoading("Running daily summary") {
+            let run = try await makeClient().runDailySummary(summarySettingsStore.settings.summaryRunInput)
+            dailySummaryRuns.insert(run, at: 0)
+            let records = try await makeClient().listDailySummaryRecords(
+                important: summarySettingsStore.settings.importantOnly ? true : nil,
+                tags: summarySettingsStore.settings.tags.nilIfEmpty,
+                includeContent: false,
+                limit: 500
+            )
+            dailySummaryRecords = visibleDailySummaryRecords(records)
+            statusMessage = "Daily summary \(run.status)"
+        }
+    }
+
+    func hideDailySummaryRecord(_ record: DailySummaryRecord) {
+        hiddenDailySummaryIDs.insert(record.summaryID)
+        saveHiddenDailySummaryIDs()
+        dailySummaryRecords.removeAll { $0.summaryID == record.summaryID }
+        statusMessage = "Summary hidden"
+        lastError = nil
+    }
+
+    func restoreHiddenDailySummaries() async {
+        hiddenDailySummaryIDs.removeAll()
+        saveHiddenDailySummaryIDs()
+        await loadDailySummaries()
+    }
+
+    func loadDailySummaryRecordContent(_ record: DailySummaryRecord) async {
+        await withLoading("Loading summary content") {
+            let loaded = try await makeClient().fetchDailySummaryRecord(
+                summaryID: record.summaryID,
+                includeDeleted: includeDeletedDailySummaryRecords || record.deleted == true
+            )
+            if let index = dailySummaryRecords.firstIndex(where: { $0.summaryID == loaded.summaryID }) {
+                dailySummaryRecords[index] = loaded
+            } else {
+                dailySummaryRecords.insert(loaded, at: 0)
+            }
+            statusMessage = "Loaded summary content"
+        }
+    }
+
+    func deleteDailySummaryRecords(_ records: [DailySummaryRecord]) async {
+        let summaryIDs = records.map(\.summaryID)
+        guard !summaryIDs.isEmpty else { return }
+
+        await withLoading("Deleting summary records") {
+            let client = try makeClient()
+            let result = try await client.deleteDailySummaryRecords(summaryIDs: summaryIDs)
+            if includeDeletedDailySummaryRecords {
+                try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+            } else {
+                dailySummaryRecords.removeAll { summaryIDs.contains($0.summaryID) }
+            }
+            statusMessage = "Deleted \(result.changedRows) summary records"
+        }
+    }
+
+    func restoreDailySummaryRecords(_ records: [DailySummaryRecord]) async {
+        let summaryIDs = records.map(\.summaryID)
+        guard !summaryIDs.isEmpty else { return }
+
+        await withLoading("Restoring summary records") {
+            let client = try makeClient()
+            let result = try await client.restoreDailySummaryRecords(summaryIDs: summaryIDs)
+            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+            statusMessage = "Restored \(result.changedRows) summary records"
         }
     }
 
@@ -356,12 +694,15 @@ final class AppModel {
 
     func saveProfile(_ profile: CoreProfile, token: String?) {
         profileStore.upsert(profile)
+        validationStatus = .unverified
         do {
             if let token {
                 if token.isEmpty {
                     try keychain.deleteToken(profileID: profile.id)
+                    tokenCache = CachedProfileToken(profileID: profile.id, token: nil)
                 } else {
                     try keychain.saveToken(token, profileID: profile.id)
+                    tokenCache = CachedProfileToken(profileID: profile.id, token: token)
                 }
             }
             statusMessage = "Profile saved"
@@ -373,19 +714,18 @@ final class AppModel {
 
     func deleteSelectedProfile() {
         guard let removed = profileStore.deleteSelected() else { return }
+        validationStatus = .unverified
         do {
             try keychain.deleteToken(profileID: removed.id)
+            if tokenCache?.profileID == removed.id {
+                tokenCache = nil
+            }
             statusMessage = "Profile deleted"
             lastError = nil
         } catch {
             lastError = error.localizedDescription
             statusMessage = "Failed"
         }
-    }
-
-    func tokenForSelectedProfile() -> String {
-        guard let selectedProfile else { return "" }
-        return (try? keychain.readToken(profileID: selectedProfile.id)) ?? ""
     }
 
     func openConsole() {
@@ -402,18 +742,82 @@ final class AppModel {
         localRunner.stop()
     }
 
-    private func makeClient() throws -> CoreAPIClient {
+    private var hasCachedTokenForSelectedProfile: Bool {
+        guard let selectedProfile,
+              let tokenCache,
+              tokenCache.profileID == selectedProfile.id,
+              let token = tokenCache.token,
+              !token.isEmpty else {
+            return false
+        }
+        return true
+    }
+
+    private func makeClient(tokenReadMode: TokenReadMode = .promptIfNeeded) throws -> CoreAPIClient {
         guard let profile = selectedProfile else {
             throw CoreAPIError.missingProfile
         }
         guard let baseURL = profile.baseURL else {
             throw CoreAPIError.invalidBaseURL(profile.baseURLString)
         }
+        let token = try token(for: profile, tokenReadMode: tokenReadMode)
         return CoreAPIClient(
             baseURL: baseURL,
-            tokenProvider: KeychainTokenProvider(keychain: keychain, profileID: profile.id),
+            tokenProvider: FixedTokenProvider(value: token),
             authMode: profile.authMode
         )
+    }
+
+    private func token(for profile: CoreProfile, tokenReadMode: TokenReadMode) throws -> String? {
+        if let tokenCache, tokenCache.profileID == profile.id {
+            return tokenCache.token
+        }
+
+        guard tokenReadMode == .promptIfNeeded else {
+            return nil
+        }
+
+        AppLog.runtime.info("Reading Keychain token for profile \(profile.id.uuidString, privacy: .public)")
+        let token = try keychain.readToken(profileID: profile.id)
+        tokenCache = CachedProfileToken(profileID: profile.id, token: token)
+        return token
+    }
+
+    private func fetchRecentMessages(tokenReadMode: TokenReadMode = .promptIfNeeded) async throws -> [CoreMessage] {
+        try await makeClient(tokenReadMode: tokenReadMode).fetchRecentMessages(limit: 100, includeMedia: true).items
+    }
+
+    private func reloadDashboard(using client: CoreAPIClient) async throws {
+        async let state = client.fetchSyncState()
+        async let capabilities = client.fetchCapabilities()
+        async let messages = client.fetchRecentMessages(limit: 100, includeMedia: true)
+        async let events = client.listOperationEvents(status: "failed", limit: 100)
+        dashboard.coreState = try await state
+        dashboard.capabilities = try await capabilities
+        dashboard.recentMessages = try await messages.items
+        dashboard.operationEvents = try await events
+        if messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.messages = dashboard.recentMessages
+        }
+    }
+
+    private func reloadDailySummaryState(using client: CoreAPIClient, settings: SummarySettings) async throws {
+        async let summaryRecords = client.listDailySummaryRecords(
+            important: settings.importantOnly ? true : nil,
+            tags: settings.tags.nilIfEmpty,
+            includeDeleted: includeDeletedDailySummaryRecords,
+            includeContent: false,
+            limit: 500
+        )
+        async let packageRuns = client.listDailyPackageRuns(limit: 50)
+        async let summaryRuns = client.listDailySummaryRuns(limit: 50)
+        async let summaryJobs = client.listDailySummaryJobs(limit: 50)
+
+        dailySummaryRecords = visibleDailySummaryRecords(try await summaryRecords)
+        dailyPackageRuns = sortDailyPackageRuns(try await packageRuns)
+        dailySummaryRuns = sortDailySummaryRuns(try await summaryRuns)
+        dailySummaryJobs = sortDailySummaryJobs(try await summaryJobs)
+        dailySummaries = []
     }
 
     private func withLoading(_ action: String, operation: () async throws -> Void) async {
@@ -427,6 +831,76 @@ final class AppModel {
             statusMessage = "Failed"
         }
         isLoading = false
+    }
+
+    private func sortDailySummaryRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {
+        records.sorted { lhs, rhs in
+            let leftTagCount = lhs.tags?.count ?? 0
+            let rightTagCount = rhs.tags?.count ?? 0
+            if leftTagCount != rightTagCount {
+                return leftTagCount > rightTagCount
+            }
+            let leftTime = lhs.updatedAt ?? lhs.createdAt ?? lhs.date ?? ""
+            let rightTime = rhs.updatedAt ?? rhs.createdAt ?? rhs.date ?? ""
+            if leftTime != rightTime {
+                return leftTime > rightTime
+            }
+            return lhs.summaryID.localizedCaseInsensitiveCompare(rhs.summaryID) == .orderedAscending
+        }
+    }
+
+    private func sortDailyPackageRuns(_ runs: [DailyPackageRun]) -> [DailyPackageRun] {
+        runs.sorted { lhs, rhs in
+            let leftTime = lhs.startedAt ?? lhs.finishedAt ?? lhs.date
+            let rightTime = rhs.startedAt ?? rhs.finishedAt ?? rhs.date
+            if leftTime != rightTime {
+                return leftTime > rightTime
+            }
+            return lhs.runID.localizedCaseInsensitiveCompare(rhs.runID) == .orderedAscending
+        }
+    }
+
+    private func sortDailySummaryRuns(_ runs: [DailySummaryRun]) -> [DailySummaryRun] {
+        runs.sorted { lhs, rhs in
+            let leftTime = lhs.startedAt ?? lhs.finishedAt ?? lhs.date ?? ""
+            let rightTime = rhs.startedAt ?? rhs.finishedAt ?? rhs.date ?? ""
+            if leftTime != rightTime {
+                return leftTime > rightTime
+            }
+            return lhs.runID.localizedCaseInsensitiveCompare(rhs.runID) == .orderedAscending
+        }
+    }
+
+    private func sortDailySummaryJobs(_ jobs: [DailySummaryJob]) -> [DailySummaryJob] {
+        jobs.sorted { lhs, rhs in
+            if lhs.isActive != rhs.isActive {
+                return lhs.isActive && !rhs.isActive
+            }
+            let leftTime = lhs.updatedAt ?? lhs.startedAt ?? lhs.finishedAt ?? lhs.date ?? ""
+            let rightTime = rhs.updatedAt ?? rhs.startedAt ?? rhs.finishedAt ?? rhs.date ?? ""
+            if leftTime != rightTime {
+                return leftTime > rightTime
+            }
+            return lhs.jobID.localizedCaseInsensitiveCompare(rhs.jobID) == .orderedAscending
+        }
+    }
+
+    private func upsertDailySummaryJob(_ job: DailySummaryJob, into jobs: [DailySummaryJob]) -> [DailySummaryJob] {
+        var updated = jobs
+        if let index = updated.firstIndex(where: { $0.jobID == job.jobID }) {
+            updated[index] = job
+        } else {
+            updated.insert(job, at: 0)
+        }
+        return sortDailySummaryJobs(updated)
+    }
+
+    private func visibleDailySummaryRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {
+        sortDailySummaryRecords(records)
+    }
+
+    private func saveHiddenDailySummaryIDs() {
+        UserDefaults.standard.set(Array(hiddenDailySummaryIDs).sorted(), forKey: hiddenDailySummaryIDsKey)
     }
 
     private func sortOrigins(_ origins: [CoreOrigin]) -> [CoreOrigin] {
@@ -502,6 +976,21 @@ final class AppModel {
             }
         }
         return targets
+    }
+
+    private func updateOriginImportantLocally(_ origin: CoreOrigin, important: Bool) {
+        origins = origins.map { current in
+            guard current.id == origin.id else { return current }
+            var updated = current
+            updated.important = important
+            return updated
+        }
+    }
+
+    private func replaceOrigin(_ origin: CoreOrigin) {
+        if let index = origins.firstIndex(where: { $0.id == origin.id }) {
+            origins[index] = origin
+        }
     }
 }
 

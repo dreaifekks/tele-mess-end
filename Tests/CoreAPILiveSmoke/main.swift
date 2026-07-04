@@ -22,7 +22,7 @@ enum CoreAPILiveSmoke {
             try expectEqual(health.ok, true, "healthz should report ok")
 
             let state = try await client.fetchSyncState()
-            try expectTrue(state.schemaVersion?.isEmpty == false, "sync state should include schema version")
+            try expectTrue(state.schemaVersion != nil, "sync state should include schema version")
 
             let capabilities = try await client.fetchCapabilities()
             let management = capabilities.management ?? []
@@ -42,7 +42,7 @@ enum CoreAPILiveSmoke {
 
             print("Core API live smoke passed")
             print("base_url=\(baseURL.absoluteString)")
-            print("schema_version=\(state.schemaVersion ?? "-")")
+            print("schema_version=\(state.schemaVersionText)")
             print("messages=\(state.messageCount)")
             print("accounts=\(accounts.count)")
             print("origins=\(origins.count)")

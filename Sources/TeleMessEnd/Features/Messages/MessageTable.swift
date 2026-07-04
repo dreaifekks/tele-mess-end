@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MessageTable: View {
     var messages: [CoreMessage]
+    var showMedia: ((CoreMessage) -> Void)?
 
     var body: some View {
         Table(messages) {
@@ -39,14 +40,25 @@ struct MessageTable: View {
                     if message.isDeleted {
                         StatusBadge(text: "Deleted", kind: .warning)
                     }
-                    if message.hasMedia {
-                        Image(systemName: "paperclip")
-                            .foregroundStyle(.secondary)
-                    }
                     Text(message.text ?? "")
                         .lineLimit(3)
                 }
             }
+
+            TableColumn("Media") { message in
+                if message.hasMedia {
+                    Button {
+                        showMedia?(message)
+                    } label: {
+                        Label(mediaLabel(for: message), systemImage: "paperclip")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Show media files")
+                } else {
+                    Text("")
+                }
+            }
+            .width(min: 80, ideal: 110)
 
             TableColumn("Link") { message in
                 if let url = message.telegramDeepLink {
@@ -60,5 +72,15 @@ struct MessageTable: View {
             }
             .width(min: 48, ideal: 56, max: 64)
         }
+    }
+
+    private func mediaLabel(for message: CoreMessage) -> String {
+        if let count = message.mediaCount, count > 0 {
+            return "\(count)"
+        }
+        if let count = message.mediaFiles?.count, count > 0 {
+            return "\(count)"
+        }
+        return "Media"
     }
 }

@@ -26,16 +26,41 @@ struct DashboardView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            StatusBadge(text: model.validationStatus.title, kind: validationBadgeKind)
             Button {
                 Task { await model.validateActiveProfile() }
             } label: {
-                Label("Validate", systemImage: "checkmark.seal")
+                Label("Validate", systemImage: model.validationStatus.systemImage)
             }
+            .tint(validationTint)
+            .disabled(model.isLoading)
             Button {
                 model.openConsole()
             } label: {
                 Label("Open Console", systemImage: "safari")
             }
+        }
+    }
+
+    private var validationBadgeKind: StatusBadgeKind {
+        switch model.validationStatus {
+        case .verified:
+            .success
+        case .validating:
+            .warning
+        case .unverified, .failed:
+            .error
+        }
+    }
+
+    private var validationTint: Color {
+        switch model.validationStatus {
+        case .verified:
+            .green
+        case .validating:
+            .orange
+        case .unverified, .failed:
+            .red
         }
     }
 
@@ -45,7 +70,7 @@ struct DashboardView: View {
             MetricCard(title: "Messages", value: DisplayFormat.count(state?.messageCount), detail: "Archived rows", systemImage: "tray.full")
             MetricCard(title: "Last Event", value: DisplayFormat.count(state?.lastEventSeq), detail: "Sync cursor", systemImage: "arrow.left.arrow.right")
             MetricCard(title: "Operation Errors", value: DisplayFormat.count(state?.operationErrorCount), detail: "Failed, partial, rate limited", systemImage: "exclamationmark.triangle")
-            MetricCard(title: "Schema", value: state?.schemaVersion ?? "-", detail: "Core archive schema", systemImage: "square.stack.3d.up")
+            MetricCard(title: "Schema", value: state?.schemaVersionText ?? "-", detail: "Core archive schema", systemImage: "square.stack.3d.up")
             MetricCard(title: "Database", value: state?.databaseID ?? "-", detail: "Archive identity", systemImage: "cylinder")
             MetricCard(title: "Server Time", value: DisplayFormat.shortDateTime(state?.serverTime), detail: "Core clock", systemImage: "clock")
         }

@@ -35,7 +35,10 @@ struct ContentView: View {
                 }
         }
         .task {
-            await model.loadDashboard()
+            await model.loadDashboard(allowKeychainUI: false)
+        }
+        .task {
+            await model.runRecentMessageRefreshLoop()
         }
         .background(WindowFrameAutosaveView(autosaveName: "TeleMessEndMainWindow"))
     }
@@ -51,6 +54,10 @@ struct ContentView: View {
             OriginsView(model: model)
         case .messages:
             MessagesView(model: model)
+        case .media:
+            MediaView(model: model)
+        case .summaries:
+            DailySummaryView(model: model)
         case .diagnostics:
             DiagnosticsView(model: model)
         }
@@ -81,7 +88,7 @@ private struct ProfileMenu: View {
         Menu {
             ForEach(model.profileStore.profiles) { profile in
                 Button {
-                    model.profileStore.select(profile.id)
+                    model.selectProfile(profile.id)
                 } label: {
                     Label(profile.name, systemImage: profile.id == model.profileStore.selectedProfileID ? "checkmark" : profile.kind.systemImage)
                 }

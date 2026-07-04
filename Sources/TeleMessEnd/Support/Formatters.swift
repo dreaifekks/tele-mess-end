@@ -23,10 +23,15 @@ enum DisplayFormat {
 
     static func shortDateTime(_ value: String?) -> String {
         guard let value, !value.isEmpty else { return "" }
-        if let date = fractionalISOFormatter.date(from: value) ?? isoFormatter.date(from: value) {
+        if let date = date(from: value) {
             return localDateFormatter.string(from: date)
         }
         return value.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "+00:00", with: "Z")
+    }
+
+    static func date(from value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        return fractionalISOFormatter.date(from: value) ?? isoFormatter.date(from: value)
     }
 
     static func count(_ value: Int?) -> String {

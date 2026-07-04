@@ -27,7 +27,9 @@ struct MessagesView: View {
             if model.messages.isEmpty {
                 EmptyStateView(title: "No messages", detail: "Load recent messages or run a full-text search.", systemImage: "text.bubble")
             } else {
-                MessageTable(messages: model.messages)
+                MessageTable(messages: model.messages) { message in
+                    Task { await model.showMedia(for: message) }
+                }
             }
         }
         .padding(20)

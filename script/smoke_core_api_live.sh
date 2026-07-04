@@ -14,6 +14,7 @@ swiftc \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreAPI/CoreAPIClient.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreAPI/CoreAPIError.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreAPI/CoreAPIModels.swift" \
+  "$ROOT_DIR/Sources/TeleMessEnd/Support/Log.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/Support/KeychainStore.swift" \
   "$ROOT_DIR/Tests/CoreAPILiveSmoke/main.swift" \
   -o "$BINARY"

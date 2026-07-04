@@ -51,6 +51,16 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  codesign_args=(--force --sign "$CODESIGN_IDENTITY")
+  if [[ "${CODESIGN_HARDENED_RUNTIME:-0}" == "1" ]]; then
+    codesign_args+=(--options runtime)
+  fi
+  /usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
+else
+  /usr/bin/codesign --force --sign - "$APP_BUNDLE"
+fi
+
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }

@@ -166,7 +166,7 @@ struct OriginsView: View {
     @TableColumnBuilder<CoreOrigin, KeyPathComparator<CoreOrigin>>
     private var originColumns: some TableColumnContent<CoreOrigin, KeyPathComparator<CoreOrigin>> {
         TableColumn("Title", sortUsing: KeyPathComparator(\CoreOrigin.displayTitle)) { origin in
-            selectableCell(origin, position: .leading) {
+            selectableCell(origin) {
                 HStack(spacing: 8) {
                     if hasTopicChildren(origin) {
                         Button {
@@ -189,9 +189,10 @@ struct OriginsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(origin.displayTitle)
                             .lineLimit(1)
+                            .fontWeight(origin.important ? .medium : .regular)
                         Text("\(origin.originID) / topic \(origin.topicID)")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(origin.important ? Color.primary.opacity(0.76) : Color.secondary)
                     }
                 }
             }
@@ -201,6 +202,7 @@ struct OriginsView: View {
         TableColumn("Account", sortUsing: KeyPathComparator(\CoreOrigin.accountID)) { origin in
             selectableCell(origin) {
                 Text(origin.accountID)
+                    .foregroundStyle(origin.important ? Color.primary.opacity(0.92) : Color.primary)
             }
         }
         .width(min: 90, ideal: 120)
@@ -224,13 +226,14 @@ struct OriginsView: View {
             selectableCell(origin) {
                 Text(origin.backupPolicy?.tags ?? "")
                     .lineLimit(1)
+                    .foregroundStyle(origin.important ? Color.primary.opacity(0.9) : Color.primary)
             }
         }
 
         TableColumn("Last Message", sortUsing: KeyPathComparator(\CoreOrigin.lastMessageSortValue)) { origin in
-            selectableCell(origin, position: .trailing) {
+            selectableCell(origin) {
                 Text(DisplayFormat.shortDateTime(origin.lastMessageAt))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(origin.important ? Color.primary.opacity(0.76) : Color.secondary)
             }
         }
         .width(min: 140, ideal: 180)
@@ -332,19 +335,12 @@ struct OriginsView: View {
 
     private func selectableCell<Content: View>(
         _ origin: CoreOrigin,
-        position: OriginHighlightCellPosition = .middle,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 5)
             .padding(.horizontal, 8)
-            .background {
-                if origin.important {
-                    OriginHighlightCellBackground(position: position)
-                        .fill(Color.yellow.opacity(0.18))
-                }
-            }
             .contentShape(Rectangle())
             .onTapGesture {
                 guard !manageMode else { return }
@@ -400,44 +396,6 @@ struct OriginsView: View {
         }
 
         return compareHierarchy(lhs, rhs)
-    }
-}
-
-private enum OriginHighlightCellPosition {
-    case leading
-    case middle
-    case trailing
-}
-
-private struct OriginHighlightCellBackground: Shape {
-    var position: OriginHighlightCellPosition
-    private let radius: CGFloat = 10
-
-    func path(in rect: CGRect) -> Path {
-        switch position {
-        case .leading:
-            Path { path in
-                path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-                path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.minY))
-                path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.minY + radius), control: CGPoint(x: rect.minX, y: rect.minY))
-                path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
-                path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: rect.maxY), control: CGPoint(x: rect.minX, y: rect.maxY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-                path.closeSubpath()
-            }
-        case .middle:
-            Path(rect)
-        case .trailing:
-            Path { path in
-                path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-                path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
-                path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + radius), control: CGPoint(x: rect.maxX, y: rect.minY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
-                path.addQuadCurve(to: CGPoint(x: rect.maxX - radius, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
-                path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-                path.closeSubpath()
-            }
-        }
     }
 }
 

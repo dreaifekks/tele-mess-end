@@ -30,6 +30,9 @@ struct DailySummaryView: View {
                 await model.loadDailySummaries()
             }
         }
+        .task {
+            await model.runDailySummaryProgressLoop()
+        }
         .onChange(of: model.dailySummaryRecords.map(\.id)) {
             let ids = Set(model.dailySummaryRecords.map(\.id))
             selectedRecordIDs = selectedRecordIDs.intersection(ids)
@@ -207,17 +210,17 @@ struct DailySummaryView: View {
                             }
                             Text(record.title ?? record.summaryID)
                                 .lineLimit(1)
+                            if record.deleted == true {
+                                Image(systemName: "trash.fill")
+                                    .foregroundStyle(.red)
+                                    .help("Deleted")
+                            }
                         }
                         Text(record.contentPreview)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
-                }
-            }
-            TableColumn("State") { record in
-                recordCell(record) {
-                    StatusBadge(text: record.deleted == true ? "Deleted" : "Active", kind: record.deleted == true ? .warning : .success)
                 }
             }
             TableColumn("Date") { record in recordCell(record) { Text(record.date ?? "") } }
@@ -454,12 +457,14 @@ private struct SummaryRecordDetailPanel: View {
             if let record {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(record.title ?? record.summaryID)
                                 .font(.headline)
                                 .lineLimit(2)
                             if record.deleted == true {
-                                StatusBadge(text: "Deleted", kind: .warning)
+                                Image(systemName: "trash.fill")
+                                    .foregroundStyle(.red)
+                                    .help("Deleted")
                             }
                         }
                         if selectedCount > 1 {
@@ -480,9 +485,6 @@ private struct SummaryRecordDetailPanel: View {
                 LazyVGrid(columns: detailColumns, alignment: .leading, spacing: 8) {
                     SummaryMetadataTile(title: "Date", value: record.date ?? "-")
                     SummaryMetadataTile(title: "Provider", value: record.provider ?? "-")
-                    SummaryMetadataTile(title: "Tags", value: tagsText(record.tags))
-                    SummaryMetadataTile(title: "Updated", value: DisplayFormat.shortDateTime(record.updatedAt ?? record.createdAt))
-                    SummaryMetadataTile(title: "Deleted", value: DisplayFormat.shortDateTime(record.deletedAt))
                 }
 
                 if record.contentMD == nil {
@@ -520,11 +522,6 @@ private struct SummaryRecordDetailPanel: View {
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.regularMaterial)
-    }
-
-    private func tagsText(_ tags: [String]?) -> String {
-        guard let tags, !tags.isEmpty else { return "-" }
-        return tags.joined(separator: ", ")
     }
 
     private var detailColumns: [GridItem] {
@@ -607,6 +604,15 @@ private struct MarkdownContentView: View {
                     .lineSpacing(3)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        case .table(let headers, let rows):
+            VStack(alignment: .leading, spacing: 0) {
+                tableRow(headers, isHeader: true)
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    tableRow(row, isHeader: false)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
         case .quote(let text):
             Text(inlineMarkdown(text))
                 .font(.body)
@@ -629,6 +635,25 @@ private struct MarkdownContentView: View {
         case .divider:
             Divider()
                 .padding(.vertical, 4)
+        }
+    }
+
+    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                Text(inlineMarkdown(cell))
+                    .font(isHeader ? Font.caption.weight(.semibold) : Font.caption)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(isHeader ? Color.secondary.opacity(0.12) : Color.clear)
+                    .overlay {
+                        Rectangle()
+                            .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
+                    }
+            }
         }
     }
 
@@ -661,6 +686,7 @@ private enum MarkdownBlock {
     case paragraph(String)
     case bullet(String)
     case numbered(number: Int, text: String)
+    case table(headers: [String], rows: [[String]])
     case quote(String)
     case code(String)
     case divider
@@ -674,14 +700,17 @@ private enum MarkdownBlockParser {
         var inCodeFence = false
 
         func flushParagraph() {
-            let text = paragraphLines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = paragraphLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 blocks.append(.paragraph(text))
             }
             paragraphLines.removeAll()
         }
 
-        for rawLine in markdown.components(separatedBy: .newlines) {
+        let lines = markdown.components(separatedBy: .newlines)
+        var index = 0
+        while index < lines.count {
+            let rawLine = lines[index]
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("```") {
@@ -693,50 +722,66 @@ private enum MarkdownBlockParser {
                     flushParagraph()
                     inCodeFence = true
                 }
+                index += 1
                 continue
             }
 
             if inCodeFence {
                 codeLines.append(rawLine)
+                index += 1
                 continue
             }
 
             if trimmed.isEmpty {
                 flushParagraph()
+                index += 1
                 continue
             }
 
             if trimmed == "---" || trimmed == "***" || trimmed == "___" {
                 flushParagraph()
                 blocks.append(.divider)
+                index += 1
+                continue
+            }
+
+            if let table = table(startingAt: index, in: lines) {
+                flushParagraph()
+                blocks.append(.table(headers: table.headers, rows: table.rows))
+                index = table.nextIndex
                 continue
             }
 
             if let heading = heading(from: trimmed) {
                 flushParagraph()
                 blocks.append(.heading(level: heading.level, text: heading.text))
+                index += 1
                 continue
             }
 
             if let bullet = bullet(from: trimmed) {
                 flushParagraph()
                 blocks.append(.bullet(bullet))
+                index += 1
                 continue
             }
 
             if let item = numbered(from: trimmed) {
                 flushParagraph()
                 blocks.append(.numbered(number: item.number, text: item.text))
+                index += 1
                 continue
             }
 
             if trimmed.hasPrefix(">") {
                 flushParagraph()
                 blocks.append(.quote(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)))
+                index += 1
                 continue
             }
 
             paragraphLines.append(trimmed)
+            index += 1
         }
 
         if inCodeFence {
@@ -744,6 +789,65 @@ private enum MarkdownBlockParser {
         }
         flushParagraph()
         return blocks
+    }
+
+    private static func table(startingAt index: Int, in lines: [String]) -> (headers: [String], rows: [[String]], nextIndex: Int)? {
+        guard index + 1 < lines.count,
+              let headers = tableCells(from: lines[index]),
+              headers.count > 1,
+              let separator = tableCells(from: lines[index + 1]),
+              separator.count == headers.count,
+              isTableSeparator(separator) else {
+            return nil
+        }
+
+        var rows: [[String]] = []
+        var current = index + 2
+        while current < lines.count {
+            guard let cells = tableCells(from: lines[current]), !isTableSeparator(cells) else {
+                break
+            }
+            rows.append(normalizedTableCells(cells, count: headers.count))
+            current += 1
+        }
+
+        return (headers: headers, rows: rows, nextIndex: current)
+    }
+
+    private static func tableCells(from line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("|") else { return nil }
+        var content = trimmed
+        if content.hasPrefix("|") {
+            content.removeFirst()
+        }
+        if content.hasSuffix("|") {
+            content.removeLast()
+        }
+        let cells = content
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard cells.count > 1, cells.contains(where: { !$0.isEmpty }) else {
+            return nil
+        }
+        return cells
+    }
+
+    private static func isTableSeparator(_ cells: [String]) -> Bool {
+        cells.allSatisfy { cell in
+            let compact = cell.replacingOccurrences(of: " ", with: "")
+            return compact.contains("-") && compact.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    private static func normalizedTableCells(_ cells: [String], count: Int) -> [String] {
+        if cells.count == count {
+            return cells
+        }
+        if cells.count > count {
+            return Array(cells.prefix(count))
+        }
+        return cells + Array(repeating: "", count: count - cells.count)
     }
 
     private static func heading(from line: String) -> (level: Int, text: String)? {
@@ -756,7 +860,7 @@ private enum MarkdownBlockParser {
     }
 
     private static func bullet(from line: String) -> String? {
-        for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
+        for marker in ["- ", "* ", "+ ", "• "] where line.hasPrefix(marker) {
             return String(line.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces)
         }
         return nil

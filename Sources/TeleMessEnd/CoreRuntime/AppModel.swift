@@ -15,6 +15,7 @@ private struct CachedProfileToken {
 }
 
 private let recentMessageRefreshIntervalNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
+private let dailySummaryProgressRefreshIntervalNanoseconds: UInt64 = 10 * 1_000_000_000
 
 private enum TokenReadMode {
     case promptIfNeeded
@@ -86,6 +87,7 @@ final class AppModel {
     let localRunner = LocalCoreProcessController()
     @ObservationIgnored private var tokenCache: CachedProfileToken?
     @ObservationIgnored private var isRecentMessageRefreshLoopRunning = false
+    @ObservationIgnored private var isDailySummaryProgressLoopRunning = false
 
     var selectedSection: AppSection = .dashboard
     var dashboard = DashboardState()
@@ -234,6 +236,19 @@ final class AppModel {
             try? await Task.sleep(nanoseconds: recentMessageRefreshIntervalNanoseconds)
             guard !Task.isCancelled else { return }
             await refreshRecentMessagesInBackground()
+        }
+    }
+
+    func runDailySummaryProgressLoop() async {
+        guard !isDailySummaryProgressLoopRunning else { return }
+        isDailySummaryProgressLoopRunning = true
+        defer { isDailySummaryProgressLoopRunning = false }
+
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: dailySummaryProgressRefreshIntervalNanoseconds)
+            guard !Task.isCancelled else { return }
+            guard activeDailySummaryJob != nil else { continue }
+            await refreshDailySummaryProgressInBackground()
         }
     }
 
@@ -529,12 +544,17 @@ final class AppModel {
     }
 
     func runDailyPackageAndSummary() async {
-        await withLoading("Starting daily analysis") {
+        lastError = nil
+        statusMessage = "Starting daily analysis"
+        do {
             let client = try makeClient()
             let job = try await client.runDailySummaryJob(summarySettingsStore.settings.summaryRunInput)
             dailySummaryJobs = upsertDailySummaryJob(job, into: dailySummaryJobs)
             try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
             statusMessage = "Daily analysis \(job.status)"
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "Failed"
         }
     }
 
@@ -547,6 +567,20 @@ final class AppModel {
             } else {
                 statusMessage = "Daily analysis refreshed"
             }
+        }
+    }
+
+    func refreshDailySummaryProgressInBackground() async {
+        guard !isLoading else { return }
+
+        do {
+            let client = try makeClient(tokenReadMode: .cacheOnly)
+            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+            if let job = latestDailySummaryJob {
+                statusMessage = "Daily analysis \(job.status)"
+            }
+        } catch {
+            return
         }
     }
 

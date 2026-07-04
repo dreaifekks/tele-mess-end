@@ -56,6 +56,34 @@ Run locally:
 ./script/build_and_run.sh
 ```
 
+Build a local DMG for testing:
+
+```bash
+./script/package_macos.sh
+```
+
+Without `CODESIGN_IDENTITY`, the package script uses ad-hoc signing and is only
+intended for local install-flow testing. For Developer ID packaging, run it with
+your signing identity:
+
+```bash
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./script/package_macos.sh
+```
+
+Set `NOTARIZE=1` plus notarization credentials to submit and staple the DMG.
+
+Publish a GitHub Release DMG by pushing a version tag that matches `VERSION`:
+
+```bash
+git tag "v$(tr -d '[:space:]' < VERSION)"
+git push origin "v$(tr -d '[:space:]' < VERSION)"
+```
+
+The release workflow runs on a GitHub-hosted macOS runner, builds the DMG, and
+uploads it to the matching GitHub Release. Until Developer ID signing is
+configured, that DMG is ad-hoc signed and macOS Gatekeeper will warn on first
+open.
+
 Run Core API contract tests without XCTest:
 
 ```bash

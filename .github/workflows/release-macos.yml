@@ -1,0 +1,86 @@
+name: Release macOS DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-macos:
+    name: Build and upload DMG
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(tr -d '[:space:]' < VERSION)"
+
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION $package_version"
+            exit 1
+          fi
+
+      - name: Run tests
+        shell: bash
+        run: swift test --scratch-path .build
+
+      - name: Build DMG
+        shell: bash
+        run: ./script/package_macos.sh
+
+      - name: Verify DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          artifacts=(dist/*.dmg)
+
+          if [[ "${#artifacts[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one DMG in dist, found ${#artifacts[@]}"
+            printf '%s\n' "${artifacts[@]}"
+            exit 1
+          fi
+
+          hdiutil verify "${artifacts[0]}"
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tag="$GITHUB_REF_NAME"
+          artifacts=(dist/*.dmg)
+          notes_file="$RUNNER_TEMP/release-notes.md"
+
+          if [[ "${#artifacts[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one DMG in dist, found ${#artifacts[@]}"
+            exit 1
+          fi
+
+          {
+            printf '%s\n' "Automated macOS DMG build."
+            printf '\n'
+            printf '%s\n' "This build is ad-hoc signed and not notarized. macOS Gatekeeper may require right-click Open or approval in Privacy & Security."
+          } >"$notes_file"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${artifacts[@]}" --clobber
+          else
+            gh release create "$tag" "${artifacts[@]}" --title "$tag" --notes-file "$notes_file"
+          fi

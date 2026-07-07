@@ -7,6 +7,9 @@ struct DailySummaryView: View {
     @State private var pendingDeleteRecords: [DailySummaryRecord] = []
     @State private var showingDeleteConfirmation = false
     @State private var isDetailExpanded = false
+    @State private var sortOrder = [
+        KeyPathComparator(\DailySummaryRecord.updatedSortValue, order: .reverse)
+    ]
     @FocusState private var focusedArea: SummaryFocusArea?
 
     var body: some View {
@@ -144,11 +147,11 @@ struct DailySummaryView: View {
     }
 
     private var selectedRecord: DailySummaryRecord? {
-        model.dailySummaryRecords.first { selectedRecordIDs.contains($0.id) }
+        summaryRecordRows.first { selectedRecordIDs.contains($0.id) }
     }
 
     private var selectedRecords: [DailySummaryRecord] {
-        model.dailySummaryRecords.filter { selectedRecordIDs.contains($0.id) }
+        summaryRecordRows.filter { selectedRecordIDs.contains($0.id) }
     }
 
     private var selectedActiveRecords: [DailySummaryRecord] {
@@ -199,38 +202,53 @@ struct DailySummaryView: View {
     }
 
     private var summaryRecordsTable: some View {
-        Table(model.dailySummaryRecords, selection: $selectedRecordIDs) {
-            TableColumn("Title") { record in
-                recordCell(record) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            if record.important == true {
-                                Image(systemName: "star.fill")
-                                    .foregroundStyle(.yellow)
-                            }
-                            Text(record.title ?? record.summaryID)
-                                .lineLimit(1)
-                            if record.deleted == true {
-                                Image(systemName: "trash.fill")
-                                    .foregroundStyle(.red)
-                                    .help("Deleted")
-                            }
+        Table(summaryRecordRows, selection: $selectedRecordIDs, sortOrder: $sortOrder) {
+            summaryRecordColumns
+        }
+    }
+
+    @TableColumnBuilder<DailySummaryRecord, KeyPathComparator<DailySummaryRecord>>
+    private var summaryRecordColumns: some TableColumnContent<DailySummaryRecord, KeyPathComparator<DailySummaryRecord>> {
+        TableColumn("Title", sortUsing: KeyPathComparator(\DailySummaryRecord.titleSortValue)) { record in
+            recordCell(record) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        if record.important == true {
+                            Image(systemName: "star.fill")
+                                .foregroundStyle(.yellow)
                         }
-                        Text(record.contentPreview)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                        Text(record.title ?? record.summaryID)
+                            .lineLimit(1)
+                        if record.deleted == true {
+                            Image(systemName: "trash.fill")
+                                .foregroundStyle(.red)
+                                .help("Deleted")
+                        }
                     }
+                    Text(record.contentPreview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
-            TableColumn("Date") { record in recordCell(record) { Text(record.date ?? "") } }
-            TableColumn("Tags") { record in recordCell(record) { Text(tagsText(record.tags)).lineLimit(1) } }
-            TableColumn("Provider") { record in recordCell(record) { Text(record.provider ?? "") } }
-            TableColumn("Updated") { record in
-                recordCell(record) {
-                    Text(DisplayFormat.shortDateTime(record.updatedAt ?? record.createdAt))
-                        .foregroundStyle(.secondary)
-                }
+        }
+
+        TableColumn("Date", sortUsing: KeyPathComparator(\DailySummaryRecord.dateSortValue)) { record in
+            recordCell(record) { Text(record.date ?? "") }
+        }
+
+        TableColumn("Tags", sortUsing: KeyPathComparator(\DailySummaryRecord.tagsSortValue)) { record in
+            recordCell(record) { Text(tagsText(record.tags)).lineLimit(1) }
+        }
+
+        TableColumn("Provider", sortUsing: KeyPathComparator(\DailySummaryRecord.providerSortValue)) { record in
+            recordCell(record) { Text(record.provider ?? "") }
+        }
+
+        TableColumn("Updated", sortUsing: KeyPathComparator(\DailySummaryRecord.updatedSortValue)) { record in
+            recordCell(record) {
+                Text(DisplayFormat.shortDateTime(record.updatedAt ?? record.createdAt))
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -277,10 +295,30 @@ struct DailySummaryView: View {
         model.includeDeletedDailySummaryRecords ? "No active or deleted records match the current scope." : "Run analysis or reload records from core."
     }
 
+    private var summaryRecordRows: [DailySummaryRecord] {
+        sortedRecords(model.dailySummaryRecords)
+    }
+
     private func recordCell<Content: View>(_ record: DailySummaryRecord, @ViewBuilder content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
+    }
+
+    private func sortedRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {
+        records.sorted { lhs, rhs in
+            for comparator in sortOrder {
+                switch comparator.compare(lhs, rhs) {
+                case .orderedAscending:
+                    return true
+                case .orderedDescending:
+                    return false
+                case .orderedSame:
+                    continue
+                }
+            }
+            return lhs.summaryID.localizedCaseInsensitiveCompare(rhs.summaryID) == .orderedAscending
+        }
     }
 
     private func tagsText(_ tags: [String]?) -> String {
@@ -289,20 +327,21 @@ struct DailySummaryView: View {
     }
 
     private func moveSelection(_ direction: MoveCommandDirection) {
-        guard !model.dailySummaryRecords.isEmpty else { return }
+        let rows = summaryRecordRows
+        guard !rows.isEmpty else { return }
         let currentIndex = selectedRecord.flatMap { record in
-            model.dailySummaryRecords.firstIndex { $0.id == record.id }
+            rows.firstIndex { $0.id == record.id }
         }
         let nextIndex: Int
         switch direction {
         case .up:
             nextIndex = max((currentIndex ?? 0) - 1, 0)
         case .down:
-            nextIndex = min((currentIndex ?? -1) + 1, model.dailySummaryRecords.count - 1)
+            nextIndex = min((currentIndex ?? -1) + 1, rows.count - 1)
         default:
             return
         }
-        selectedRecordIDs = [model.dailySummaryRecords[nextIndex].id]
+        selectedRecordIDs = [rows[nextIndex].id]
         focusedArea = .records
         if let selectedRecord, selectedRecord.contentMD == nil {
             Task { await model.loadDailySummaryRecordContent(selectedRecord) }

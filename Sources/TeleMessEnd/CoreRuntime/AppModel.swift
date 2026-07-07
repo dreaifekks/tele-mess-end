@@ -221,7 +221,7 @@ final class AppModel {
         case .media:
             await loadMediaFiles()
         case .summaries:
-            await loadDailySummaries()
+            await refreshDailySummaryProgress()
         case .diagnostics:
             await loadDiagnostics()
         }
@@ -869,15 +869,16 @@ final class AppModel {
 
     private func sortDailySummaryRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {
         records.sorted { lhs, rhs in
-            let leftTagCount = lhs.tags?.count ?? 0
-            let rightTagCount = rhs.tags?.count ?? 0
-            if leftTagCount != rightTagCount {
-                return leftTagCount > rightTagCount
-            }
-            let leftTime = lhs.updatedAt ?? lhs.createdAt ?? lhs.date ?? ""
-            let rightTime = rhs.updatedAt ?? rhs.createdAt ?? rhs.date ?? ""
+            let leftTime = lhs.updatedSortValue
+            let rightTime = rhs.updatedSortValue
             if leftTime != rightTime {
                 return leftTime > rightTime
+            }
+            if lhs.dateSortValue != rhs.dateSortValue {
+                return lhs.dateSortValue > rhs.dateSortValue
+            }
+            if lhs.titleSortValue != rhs.titleSortValue {
+                return lhs.titleSortValue.localizedCaseInsensitiveCompare(rhs.titleSortValue) == .orderedAscending
             }
             return lhs.summaryID.localizedCaseInsensitiveCompare(rhs.summaryID) == .orderedAscending
         }

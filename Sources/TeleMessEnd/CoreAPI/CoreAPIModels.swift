@@ -995,6 +995,28 @@ struct DailySummaryRecord: Decodable, Identifiable, Hashable {
     }
 }
 
+extension DailySummaryRecord {
+    var titleSortValue: String {
+        title ?? summaryID
+    }
+
+    var dateSortValue: String {
+        date ?? ""
+    }
+
+    var tagsSortValue: String {
+        tagsCSV ?? tags?.joined(separator: ", ") ?? ""
+    }
+
+    var providerSortValue: String {
+        provider ?? ""
+    }
+
+    var updatedSortValue: String {
+        updatedAt ?? createdAt ?? date ?? ""
+    }
+}
+
 struct DailySummaryRecordDeleteInput: Encodable {
     var summaryID: String?
     var ids: [String]?

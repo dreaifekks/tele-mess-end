@@ -577,12 +577,15 @@ enum CoreAPIContractTests {
             expectedPath: "/manage/daily-package-schedule",
             responseJSON:
             """
-            {"item": {"enabled": true, "time_of_day": "08:30", "timezone": "Asia/Tokyo", "scope": {"important": true}, "system_manager": "systemd-user", "installed": true}}
+            {"item": {"enabled": true, "time_of_day": "08:30", "timezone": "Asia/Tokyo", "scope": {"important": true}, "delivery": {"enabled": true, "account_id": "main", "origin_id": -1001, "topic_id": 42}, "system_manager": "systemd-user", "installed": true}}
             """
         )
         let schedule = try await scheduleClient.fetchDailyPackageSchedule()
         try expectEqual(schedule.enabled, true)
         try expectEqual(schedule.timeOfDay, "08:30")
+        try expectEqual(schedule.delivery?.accountID, "main")
+        try expectEqual(schedule.delivery?.originID, -1001)
+        try expectEqual(schedule.delivery?.topicID, 42)
 
         let updateScheduleClient = makeClient(
             expectedMethod: "PATCH",
@@ -595,10 +598,23 @@ enum CoreAPIContractTests {
                 let body = try requestJSONObject(request)
                 try expectEqual(body["time_of_day"] as? String, "09:00")
                 try expectEqual(body["enabled"] as? Bool, false)
+                let delivery = try expectDictionary(body["delivery"], "Expected delivery object")
+                try expectEqual(delivery["enabled"] as? Bool, true)
+                try expectEqual(delivery["account_id"] as? String, "main")
+                try expectEqual(delivery["origin_id"] as? Int, -1001)
+                try expectEqual(delivery["topic_id"] as? Int, 42)
             }
         )
         let updatedSchedule = try await updateScheduleClient.updateDailyPackageSchedule(
-            DailyPackageScheduleInput(enabled: false, timeOfDay: "09:00", timezone: "Asia/Tokyo", scope: .object([:]), systemManager: "systemd-user", activateSystemd: false)
+            DailyPackageScheduleInput(
+                enabled: false,
+                timeOfDay: "09:00",
+                timezone: "Asia/Tokyo",
+                scope: .object([:]),
+                systemManager: "systemd-user",
+                activateSystemd: false,
+                delivery: DailySummaryDeliveryConfig(enabled: true, accountID: "main", originID: -1001, topicID: 42)
+            )
         )
         try expectEqual(updatedSchedule.timeOfDay, "09:00")
 
@@ -892,6 +908,13 @@ private func expectNil<T>(_ value: T?, _ message: String? = nil) throws {
     guard value == nil else {
         throw ContractError.failure(message ?? "Expected nil, got \(String(describing: value))")
     }
+}
+
+private func expectDictionary(_ value: Any?, _ message: String? = nil) throws -> [String: Any] {
+    guard let dictionary = value as? [String: Any] else {
+        throw ContractError.failure(message ?? "Expected dictionary, got \(String(describing: value))")
+    }
+    return dictionary
 }
 
 private func expectTrue(_ value: Bool, _ message: String? = nil) throws {

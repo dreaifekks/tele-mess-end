@@ -369,6 +369,18 @@ final class AppModel {
         }
     }
 
+    func discoverSummaryScopeOptions(accountID: String) async {
+        await withLoading("Discovering summary delivery targets") {
+            let client = try makeClient()
+            let result = try await client.discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
+            async let loadedAccounts = client.listManagementAccounts()
+            async let loadedOrigins = client.listOrigins(accountID: nil, includeArchived: false)
+            accounts = try await loadedAccounts
+            origins = originImportanceStore.apply(to: try await loadedOrigins)
+            statusMessage = result.message ?? "Summary delivery targets refreshed"
+        }
+    }
+
     func archiveSelectedOrigin(_ archived: Bool) async {
         guard let origin = selectedOrigin else { return }
         await archiveOrigins([origin], archived: archived)
@@ -521,7 +533,7 @@ final class AppModel {
     func loadSummarySchedule() async {
         await withLoading("Loading summary schedule") {
             let schedule = try await makeClient().fetchDailyPackageSchedule()
-            summarySettingsStore.save(SummarySettings(schedule: schedule))
+            summarySettingsStore.save(SummarySettings(schedule: schedule, preservingDeliveryFrom: summarySettingsStore.settings))
             statusMessage = schedule.enabled ? "Summary schedule enabled" : "Summary schedule loaded"
         }
     }
@@ -529,7 +541,7 @@ final class AppModel {
     func saveSummarySchedule(_ settings: SummarySettings) async {
         await withLoading("Saving summary schedule") {
             let schedule = try await makeClient().updateDailyPackageSchedule(settings.scheduleInput)
-            summarySettingsStore.save(SummarySettings(schedule: schedule))
+            summarySettingsStore.save(SummarySettings(schedule: schedule, preservingDeliveryFrom: settings))
             statusMessage = "Summary schedule saved"
         }
     }

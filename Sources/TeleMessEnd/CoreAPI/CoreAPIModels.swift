@@ -743,6 +743,7 @@ struct DailyPackageSchedule: Decodable, Hashable {
     var timeOfDay: String
     var timezone: String
     var scope: JSONValue
+    var delivery: DailySummaryDeliveryConfig?
     var systemManager: String
     var installed: Bool
     var lastInstalledAt: String?
@@ -754,11 +755,46 @@ struct DailyPackageSchedule: Decodable, Hashable {
         case timeOfDay = "time_of_day"
         case timezone
         case scope
+        case delivery
         case systemManager = "system_manager"
         case installed
         case lastInstalledAt = "last_installed_at"
         case lastError = "last_error"
         case updatedAt = "updated_at"
+    }
+}
+
+struct DailySummaryDeliveryConfig: Codable, Hashable {
+    var enabled: Bool
+    var accountID: String
+    var originID: Int?
+    var topicID: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+    }
+
+    init(
+        enabled: Bool = false,
+        accountID: String = "",
+        originID: Int? = nil,
+        topicID: Int = 0
+    ) {
+        self.enabled = enabled
+        self.accountID = accountID
+        self.originID = originID
+        self.topicID = topicID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        accountID = try container.decodeIfPresent(String.self, forKey: .accountID) ?? ""
+        originID = try container.decodeIfPresent(Int.self, forKey: .originID)
+        topicID = try container.decodeIfPresent(Int.self, forKey: .topicID) ?? 0
     }
 }
 
@@ -769,6 +805,7 @@ struct DailyPackageScheduleInput: Encodable {
     var scope: JSONValue?
     var systemManager: String
     var activateSystemd: Bool
+    var delivery: DailySummaryDeliveryConfig? = nil
 }
 
 struct DailyPackageRun: Decodable, Identifiable, Hashable {

@@ -29,6 +29,19 @@ enum SummaryAggregationTests {
         try expectEqual(allSummaries.count, 2)
         try expectEqual(SummarySettings(schedule: try decodeSchedule(scope: #"{}"#)).importantOnly, false)
         try expectEqual(SummarySettings(schedule: try decodeSchedule(scope: #"{"important": true}"#)).importantOnly, true)
+        var deliverySettings = SummarySettings()
+        deliverySettings.deliveryEnabled = true
+        deliverySettings.deliveryAccountID = "main"
+        deliverySettings.deliveryOriginID = "-1001"
+        deliverySettings.deliveryTopicID = "42"
+        let preserved = SummarySettings(
+            schedule: try decodeSchedule(scope: #"{}"#),
+            preservingDeliveryFrom: deliverySettings
+        )
+        try expectEqual(preserved.deliveryEnabled, true)
+        try expectEqual(preserved.deliveryAccountID, "main")
+        try expectEqual(preserved.deliveryOriginID, "-1001")
+        try expectEqual(preserved.deliveryTopicID, "42")
 
         var narrowSettings = importantSettings
         narrowSettings.lookbackHours = 1

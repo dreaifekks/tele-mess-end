@@ -10,6 +10,10 @@ struct SummarySettings: Codable, Equatable {
     var topicID = ""
     var tags = ""
     var importantOnly = false
+    var deliveryEnabled = false
+    var deliveryAccountID = ""
+    var deliveryOriginID = ""
+    var deliveryTopicID = ""
     var lookbackHours = 24
     var systemManager = "systemd-user"
     var activateSystemd = false
@@ -45,7 +49,8 @@ struct SummarySettings: Codable, Equatable {
             timezone: timezone.nilIfEmpty ?? "Asia/Tokyo",
             scope: scope,
             systemManager: systemManager.nilIfEmpty ?? "systemd-user",
-            activateSystemd: activateSystemd
+            activateSystemd: activateSystemd,
+            delivery: deliveryConfig
         )
     }
 
@@ -79,7 +84,28 @@ struct SummarySettings: Codable, Equatable {
 
     init() {}
 
-    init(schedule: DailyPackageSchedule) {
+    init(from decoder: Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? enabled
+        scheduleHour = try container.decodeIfPresent(Int.self, forKey: .scheduleHour) ?? scheduleHour
+        scheduleMinute = try container.decodeIfPresent(Int.self, forKey: .scheduleMinute) ?? scheduleMinute
+        timezone = try container.decodeIfPresent(String.self, forKey: .timezone) ?? timezone
+        accountID = try container.decodeIfPresent(String.self, forKey: .accountID) ?? accountID
+        originID = try container.decodeIfPresent(String.self, forKey: .originID) ?? originID
+        topicID = try container.decodeIfPresent(String.self, forKey: .topicID) ?? topicID
+        tags = try container.decodeIfPresent(String.self, forKey: .tags) ?? tags
+        importantOnly = try container.decodeIfPresent(Bool.self, forKey: .importantOnly) ?? importantOnly
+        deliveryEnabled = try container.decodeIfPresent(Bool.self, forKey: .deliveryEnabled) ?? deliveryEnabled
+        deliveryAccountID = try container.decodeIfPresent(String.self, forKey: .deliveryAccountID) ?? deliveryAccountID
+        deliveryOriginID = try container.decodeIfPresent(String.self, forKey: .deliveryOriginID) ?? deliveryOriginID
+        deliveryTopicID = try container.decodeIfPresent(String.self, forKey: .deliveryTopicID) ?? deliveryTopicID
+        lookbackHours = try container.decodeIfPresent(Int.self, forKey: .lookbackHours) ?? lookbackHours
+        systemManager = try container.decodeIfPresent(String.self, forKey: .systemManager) ?? systemManager
+        activateSystemd = try container.decodeIfPresent(Bool.self, forKey: .activateSystemd) ?? activateSystemd
+    }
+
+    init(schedule: DailyPackageSchedule, preservingDeliveryFrom fallback: SummarySettings? = nil) {
         enabled = schedule.enabled
         timezone = schedule.timezone
         systemManager = schedule.systemManager
@@ -95,6 +121,45 @@ struct SummarySettings: Codable, Equatable {
             topicID = object["topic_id"]?.integerStringValue ?? ""
             tags = object["tags"]?.stringValue ?? ""
         }
+        if let delivery = schedule.delivery {
+            deliveryEnabled = delivery.enabled
+            deliveryAccountID = delivery.accountID
+            deliveryOriginID = delivery.originID.map(String.init) ?? ""
+            deliveryTopicID = delivery.topicID == 0 ? "" : String(delivery.topicID)
+        } else if let fallback {
+            deliveryEnabled = fallback.deliveryEnabled
+            deliveryAccountID = fallback.deliveryAccountID
+            deliveryOriginID = fallback.deliveryOriginID
+            deliveryTopicID = fallback.deliveryTopicID
+        }
+    }
+
+    private var deliveryConfig: DailySummaryDeliveryConfig {
+        DailySummaryDeliveryConfig(
+            enabled: deliveryEnabled,
+            accountID: deliveryAccountID.nilIfEmpty ?? "",
+            originID: Int(deliveryOriginID),
+            topicID: Int(deliveryTopicID) ?? 0
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case scheduleHour
+        case scheduleMinute
+        case timezone
+        case accountID
+        case originID
+        case topicID
+        case tags
+        case importantOnly
+        case deliveryEnabled
+        case deliveryAccountID
+        case deliveryOriginID
+        case deliveryTopicID
+        case lookbackHours
+        case systemManager
+        case activateSystemd
     }
 
     private static func parseTimeOfDay(_ value: String) -> (hour: Int, minute: Int)? {

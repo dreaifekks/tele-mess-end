@@ -250,6 +250,53 @@ struct SettingsView: View {
                     }
                 }
 
+                PreferenceGroup(
+                    title: "Delivery",
+                    help: "Delivery sends the final daily summary through the selected Telegram account to a selected group, channel, or forum topic."
+                ) {
+                    PreferenceRow(title: "Enable forwarding") {
+                        Toggle("", isOn: $summaryDraft.deliveryEnabled)
+                            .labelsHidden()
+                    }
+                    PreferenceDivider()
+                    PreferenceRow(title: "Sender account") {
+                        HStack(spacing: 8) {
+                            ScopeSingleSelectMenu(
+                                selection: deliveryAccountSelection,
+                                placeholder: "Select account",
+                                options: deliveryAccountOptions
+                            )
+                            Button {
+                                Task { await discoverDeliveryTargets() }
+                            } label: {
+                                Label("Discover", systemImage: "arrow.clockwise")
+                            }
+                            .labelStyle(.iconOnly)
+                            .help("Discover groups and topics for this account")
+                            .disabled(!summaryDraft.deliveryEnabled || summaryDraft.deliveryAccountID.isEmpty)
+                        }
+                    }
+                    .disabled(!summaryDraft.deliveryEnabled)
+                    PreferenceDivider()
+                    PreferenceRow(title: "Group or channel") {
+                        ScopeSingleSelectMenu(
+                            selection: deliveryOriginSelection,
+                            placeholder: "Select group",
+                            options: deliveryOriginOptions
+                        )
+                    }
+                    .disabled(!summaryDraft.deliveryEnabled || summaryDraft.deliveryAccountID.isEmpty)
+                    PreferenceDivider()
+                    PreferenceRow(title: "Topic") {
+                        ScopeSingleSelectMenu(
+                            selection: deliveryTopicSelection,
+                            placeholder: "Group root",
+                            options: deliveryTopicOptions
+                        )
+                    }
+                    .disabled(!summaryDraft.deliveryEnabled || summaryDraft.deliveryOriginID.isEmpty)
+                }
+
                 PreferenceGroup(title: "System Schedule") {
                     PreferenceRow(title: "System manager") {
                         TextField("systemd-user", text: $summaryDraft.systemManager)
@@ -273,6 +320,7 @@ struct SettingsView: View {
                         } label: {
                             Label("Save", systemImage: "checkmark")
                         }
+                        .disabled(!summaryDraftCanSave)
                         Button {
                             Task { await loadSummarySchedule() }
                         } label: {
@@ -359,8 +407,51 @@ struct SettingsView: View {
         )
     }
 
+    private var deliveryAccountSelection: Binding<String> {
+        Binding(
+            get: { summaryDraft.deliveryAccountID },
+            set: { value in
+                summaryDraft.deliveryAccountID = value
+                summaryDraft.deliveryOriginID = ""
+                summaryDraft.deliveryTopicID = ""
+            }
+        )
+    }
+
+    private var deliveryOriginSelection: Binding<String> {
+        Binding(
+            get: { summaryDraft.deliveryOriginID },
+            set: { value in
+                summaryDraft.deliveryOriginID = value
+                summaryDraft.deliveryTopicID = ""
+            }
+        )
+    }
+
+    private var deliveryTopicSelection: Binding<String> {
+        Binding(
+            get: { summaryDraft.deliveryTopicID },
+            set: { summaryDraft.deliveryTopicID = $0 }
+        )
+    }
+
+    private var summaryDraftCanSave: Bool {
+        !summaryDraft.deliveryEnabled ||
+            (!summaryDraft.deliveryAccountID.isEmpty && Int(summaryDraft.deliveryOriginID) != nil)
+    }
+
     private var scopeAccountOptions: [String] {
         Array(Set(model.accounts.map(\.accountID) + model.origins.map(\.accountID))).sorted()
+    }
+
+    private var deliveryAccountOptions: [ScopePickerOption] {
+        scopeAccountOptions.map { accountID in
+            if let account = model.accounts.first(where: { $0.accountID == accountID }),
+               account.title != accountID {
+                return ScopePickerOption(value: accountID, title: "\(account.title)  \(accountID)")
+            }
+            return ScopePickerOption(value: accountID, title: accountID)
+        }
     }
 
     private var scopeOriginOptions: [ScopePickerOption] {
@@ -402,11 +493,52 @@ struct SettingsView: View {
             }
     }
 
+    private var deliveryOriginOptions: [ScopePickerOption] {
+        let rows = model.origins.filter { origin in
+            summaryDraft.deliveryAccountID.isEmpty || origin.accountID == summaryDraft.deliveryAccountID
+        }
+        var grouped: [Int: CoreOrigin] = [:]
+        for origin in rows {
+            if !origin.isTopic || grouped[origin.originID] == nil {
+                grouped[origin.originID] = origin
+            }
+        }
+        return grouped.values
+            .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
+            .map { origin in
+                ScopePickerOption(
+                    value: String(origin.originID),
+                    title: "\(origin.displayTitle)  \(origin.originID)"
+                )
+            }
+    }
+
+    private var deliveryTopicOptions: [ScopePickerOption] {
+        model.origins
+            .filter { origin in
+                origin.isTopic &&
+                (summaryDraft.deliveryAccountID.isEmpty || origin.accountID == summaryDraft.deliveryAccountID) &&
+                (summaryDraft.deliveryOriginID.isEmpty || String(origin.originID) == summaryDraft.deliveryOriginID)
+            }
+            .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
+            .map { origin in
+                ScopePickerOption(
+                    value: String(origin.topicID),
+                    title: "\(origin.displayTitle)  \(origin.topicID)"
+                )
+            }
+    }
+
     private var scopeTagOptions: [String] {
         let tags = model.origins.flatMap { origin in
             Self.splitTags(origin.backupPolicy?.tags ?? "")
         }
         return Array(Set(tags)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private func discoverDeliveryTargets() async {
+        guard !summaryDraft.deliveryAccountID.isEmpty else { return }
+        await model.discoverSummaryScopeOptions(accountID: summaryDraft.deliveryAccountID)
     }
 
     private static func splitTags(_ value: String) -> [String] {

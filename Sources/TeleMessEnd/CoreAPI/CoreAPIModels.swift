@@ -744,6 +744,7 @@ struct DailyPackageSchedule: Decodable, Hashable {
     var timezone: String
     var scope: JSONValue
     var delivery: DailySummaryDeliveryConfig?
+    var deliveryWasProvided: Bool
     var systemManager: String
     var installed: Bool
     var lastInstalledAt: String?
@@ -761,6 +762,21 @@ struct DailyPackageSchedule: Decodable, Hashable {
         case lastInstalledAt = "last_installed_at"
         case lastError = "last_error"
         case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        timeOfDay = try container.decode(String.self, forKey: .timeOfDay)
+        timezone = try container.decode(String.self, forKey: .timezone)
+        scope = try container.decodeIfPresent(JSONValue.self, forKey: .scope) ?? .object([:])
+        deliveryWasProvided = container.contains(.delivery)
+        delivery = try container.decodeIfPresent(DailySummaryDeliveryConfig.self, forKey: .delivery)
+        systemManager = try container.decodeIfPresent(String.self, forKey: .systemManager) ?? "systemd-user"
+        installed = try container.decodeIfPresent(Bool.self, forKey: .installed) ?? false
+        lastInstalledAt = try container.decodeIfPresent(String.self, forKey: .lastInstalledAt)
+        lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
     }
 }
 

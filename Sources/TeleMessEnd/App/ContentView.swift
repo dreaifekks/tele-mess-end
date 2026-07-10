@@ -1,11 +1,18 @@
 import SwiftUI
 
+private struct ContentLoadKey: Hashable {
+    var sessionRevision: UInt64
+    var section: AppSection
+    var diagnosticsSection: DiagnosticsSection?
+}
+
 struct ContentView: View {
     @Bindable var model: AppModel
+    @State private var observedSessionRevision: UInt64?
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(selection: $model.selectedSection)
+            SidebarView(selection: $model.selectedSection, sections: model.availableSections)
                 .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 280)
         } detail: {
             detailView
@@ -34,8 +41,14 @@ struct ContentView: View {
                     StatusBar(model: model)
                 }
         }
-        .task {
-            await model.loadDashboard(allowKeychainUI: false)
+        .task(id: ContentLoadKey(
+            sessionRevision: model.sessionRevision,
+            section: model.selectedSection,
+            diagnosticsSection: model.selectedSection == .diagnostics ? model.diagnosticsSelection : nil
+        )) {
+            let allowKeychainUI = observedSessionRevision == model.sessionRevision
+            observedSessionRevision = model.sessionRevision
+            await model.refreshCurrentSectionWhenIdle(allowKeychainUI: allowKeychainUI)
         }
         .task {
             await model.runRecentMessageRefreshLoop()
@@ -97,14 +110,16 @@ private struct ProfileMenu: View {
             Divider()
 
             Button {
-                _ = model.profileStore.addRemoteProfile()
+                model.addRemoteProfile()
+                model.settingsSection = .core
                 openSettings()
             } label: {
                 Label("Add Remote Core", systemImage: "plus")
             }
 
             Button {
-                _ = model.profileStore.addLocalProfile()
+                model.addLocalProfile()
+                model.settingsSection = .core
                 openSettings()
             } label: {
                 Label("Add Local Core", systemImage: "plus")
@@ -113,6 +128,7 @@ private struct ProfileMenu: View {
             Divider()
 
             Button {
+                model.settingsSection = .core
                 openSettings()
             } label: {
                 Label("Core Settings", systemImage: "gearshape")

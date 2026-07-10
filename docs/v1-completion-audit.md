@@ -1,6 +1,6 @@
 # V1 Completion Audit
 
-Audit date: 2026-07-03
+Audit date: 2026-07-03; verification guidance revised 2026-07-10.
 
 This audit checks the current macOS V1 implementation against
 `docs/v1-scope.md`.
@@ -10,10 +10,8 @@ This audit checks the current macOS V1 implementation against
 Run from the repository root unless noted.
 
 ```bash
-env CLANG_MODULE_CACHE_PATH=.build/module-cache swift test --scratch-path .build
-./script/test_core_api.sh
+./script/verify.sh
 CORE_BASE_URL=http://127.0.0.1:18765 CORE_API_TOKEN=smoke-token ./script/smoke_core_api_live.sh
-env CLANG_MODULE_CACHE_PATH=.build/module-cache swift build --scratch-path .build
 ./script/build_and_run.sh --verify
 ```
 
@@ -27,7 +25,7 @@ participants, cursors, and media metadata through the typed Swift client.
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Native SwiftUI macOS app | Complete | `Sources/TeleMessEnd/App/TeleMessEndApp.swift` defines the SwiftUI app and `WindowGroup`. |
+| Native SwiftUI macOS app | Complete | `Sources/TeleMessEnd/App/TeleMessEndApp.swift` defines the SwiftUI app and a single shared-state `Window`. |
 | Multi-file structure | Complete | App, CoreAPI, CoreRuntime, feature views, shared UI, support, scripts, and docs are split by responsibility. |
 | Codex Run action | Complete | `script/build_and_run.sh` and `.codex/environments/environment.toml` are present; `./script/build_and_run.sh --verify` passed. |
 | Main `NavigationSplitView` | Complete | `ContentView` composes sidebar-detail navigation. |
@@ -60,8 +58,9 @@ participants, cursors, and media metadata through the typed Swift client.
 
 ## Notes
 
-- `swift test` now passes in the current CommandLineTools-only environment. The
-  real endpoint assertions live in `script/test_core_api.sh`; the SwiftPM test
-  target is kept buildable without importing XCTest.
+- `script/verify.sh` is the authoritative gate. The real endpoint and runtime
+  assertions live in executable suites because the current CommandLineTools
+  environment lacks usable XCTest and Swift Testing modules; the SwiftPM test
+  target remains framework-free and buildable.
 - V1 intentionally does not add local archive mirroring, media preview/download
   over HTTP, multi-user permissions, AI workflows, or remote core installation.

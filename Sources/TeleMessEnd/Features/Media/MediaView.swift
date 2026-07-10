@@ -27,10 +27,9 @@ struct MediaView: View {
                 .padding(.leading, 12)
         }
         .navigationTitle("Media")
-        .task {
-            if model.mediaFiles.isEmpty {
-                await model.loadMediaFiles()
-            }
+        .disabled(model.isLoading)
+        .task(id: model.sessionRevision) {
+            selection = nil
         }
     }
 

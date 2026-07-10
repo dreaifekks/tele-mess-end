@@ -14,7 +14,6 @@ struct SummarySettings: Codable, Equatable {
     var deliveryAccountID = ""
     var deliveryOriginID = ""
     var deliveryTopicID = ""
-    var lookbackHours = 24
     var systemManager = "systemd-user"
     var activateSystemd = false
 
@@ -54,19 +53,6 @@ struct SummarySettings: Codable, Equatable {
         )
     }
 
-    var packageRunInput: DailyPackageRunInput {
-        DailyPackageRunInput(
-            date: nil,
-            timezone: timezone.nilIfEmpty,
-            scope: scope,
-            accountID: accountID.nilIfEmpty,
-            originID: Int(originID),
-            topicID: Int(topicID),
-            tags: tags.nilIfEmpty,
-            tagGroups: nil
-        )
-    }
-
     var summaryRunInput: DailySummaryRunInput {
         DailySummaryRunInput(
             packageRunID: nil,
@@ -100,7 +86,6 @@ struct SummarySettings: Codable, Equatable {
         deliveryAccountID = try container.decodeIfPresent(String.self, forKey: .deliveryAccountID) ?? deliveryAccountID
         deliveryOriginID = try container.decodeIfPresent(String.self, forKey: .deliveryOriginID) ?? deliveryOriginID
         deliveryTopicID = try container.decodeIfPresent(String.self, forKey: .deliveryTopicID) ?? deliveryTopicID
-        lookbackHours = try container.decodeIfPresent(Int.self, forKey: .lookbackHours) ?? lookbackHours
         systemManager = try container.decodeIfPresent(String.self, forKey: .systemManager) ?? systemManager
         activateSystemd = try container.decodeIfPresent(Bool.self, forKey: .activateSystemd) ?? activateSystemd
     }
@@ -121,11 +106,18 @@ struct SummarySettings: Codable, Equatable {
             topicID = object["topic_id"]?.integerStringValue ?? ""
             tags = object["tags"]?.stringValue ?? ""
         }
-        if let delivery = schedule.delivery {
-            deliveryEnabled = delivery.enabled
-            deliveryAccountID = delivery.accountID
-            deliveryOriginID = delivery.originID.map(String.init) ?? ""
-            deliveryTopicID = delivery.topicID == 0 ? "" : String(delivery.topicID)
+        if schedule.deliveryWasProvided {
+            if let delivery = schedule.delivery {
+                deliveryEnabled = delivery.enabled
+                deliveryAccountID = delivery.accountID
+                deliveryOriginID = delivery.originID.map(String.init) ?? ""
+                deliveryTopicID = delivery.topicID == 0 ? "" : String(delivery.topicID)
+            } else {
+                deliveryEnabled = false
+                deliveryAccountID = ""
+                deliveryOriginID = ""
+                deliveryTopicID = ""
+            }
         } else if let fallback {
             deliveryEnabled = fallback.deliveryEnabled
             deliveryAccountID = fallback.deliveryAccountID
@@ -157,7 +149,6 @@ struct SummarySettings: Codable, Equatable {
         case deliveryAccountID
         case deliveryOriginID
         case deliveryTopicID
-        case lookbackHours
         case systemManager
         case activateSystemd
     }

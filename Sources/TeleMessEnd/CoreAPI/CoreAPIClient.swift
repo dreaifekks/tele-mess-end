@@ -513,6 +513,10 @@ struct CoreAPIClient: Sendable {
                 throw CoreAPIError.httpStatus(response.statusCode, detail)
             }
             return try JSONDecoder.core.decode(Response.self, from: data)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as CoreAPIError {
             throw error
         } catch let error as DecodingError {
@@ -532,6 +536,10 @@ struct CoreAPIClient: Sendable {
                 throw CoreAPIError.httpStatus(response.statusCode, detail)
             }
             return data
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as CoreAPIError {
             throw error
         } catch {
@@ -552,6 +560,10 @@ struct CoreAPIClient: Sendable {
                 throw CoreAPIError.invalidResponse
             }
             return value
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as CoreAPIError {
             throw error
         } catch {

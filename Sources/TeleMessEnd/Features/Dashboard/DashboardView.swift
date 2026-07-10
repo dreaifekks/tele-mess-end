@@ -73,6 +73,8 @@ struct DashboardView: View {
             MetricCard(title: "Schema", value: state?.schemaVersionText ?? "-", detail: "Core archive schema", systemImage: "square.stack.3d.up")
             MetricCard(title: "Database", value: state?.databaseID ?? "-", detail: "Archive identity", systemImage: "cylinder")
             MetricCard(title: "Server Time", value: DisplayFormat.shortDateTime(state?.serverTime), detail: "Core clock", systemImage: "clock")
+            MetricCard(title: "API Contract", value: model.dashboard.apiManifest?.contractVersion ?? "-", detail: "Live manifest version", systemImage: "doc.badge.gearshape")
+            MetricCard(title: "Contract Hash", value: model.dashboard.apiManifest?.contractHash ?? "-", detail: "Compatibility fingerprint", systemImage: "number")
         }
     }
 

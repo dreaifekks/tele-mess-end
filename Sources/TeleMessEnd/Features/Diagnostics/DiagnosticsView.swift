@@ -1,5 +1,10 @@
 import SwiftUI
 
+private struct DiagnosticsLoadKey: Hashable {
+    var sessionRevision: UInt64
+    var section: DiagnosticsSection
+}
+
 struct DiagnosticsView: View {
     @Bindable var model: AppModel
     @State private var selectedOperationEventID: CoreOperationEvent.ID?
@@ -52,11 +57,10 @@ struct DiagnosticsView: View {
         }
         .padding(20)
         .navigationTitle("Diagnostics")
-        .task {
-            await model.loadDiagnostics()
-        }
-        .onChange(of: model.diagnosticsSelection) {
+        .disabled(model.isLoading)
+        .task(id: DiagnosticsLoadKey(sessionRevision: model.sessionRevision, section: model.diagnosticsSelection)) {
             clearDetailSelection()
+            pendingDeleteOperationEvent = nil
         }
         .alert("Delete operation event?", isPresented: Binding(
             get: { pendingDeleteOperationEvent != nil },
@@ -69,8 +73,9 @@ struct DiagnosticsView: View {
             Button("Delete", role: .destructive) {
                 if let event = pendingDeleteOperationEvent {
                     Task {
-                        await model.deleteOperationEvent(event)
-                        selectedOperationEventID = nil
+                        if await model.deleteOperationEvent(event) {
+                            selectedOperationEventID = nil
+                        }
                     }
                 }
                 pendingDeleteOperationEvent = nil

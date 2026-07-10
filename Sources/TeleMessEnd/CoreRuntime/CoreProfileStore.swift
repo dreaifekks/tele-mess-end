@@ -4,8 +4,8 @@ import Observation
 @MainActor
 @Observable
 final class CoreProfileStore {
-    var profiles: [CoreProfile] = []
-    var selectedProfileID: UUID?
+    private(set) var profiles: [CoreProfile] = []
+    private(set) var selectedProfileID: UUID?
 
     private let defaults: UserDefaults
     private let profilesKey = "teleMessEnd.coreProfiles"
@@ -43,7 +43,11 @@ final class CoreProfileStore {
     }
 
     func select(_ id: UUID?) {
-        selectedProfileID = id
+        if let id, profiles.contains(where: { $0.id == id }) {
+            selectedProfileID = id
+        } else {
+            selectedProfileID = profiles.first?.id
+        }
         save()
     }
 

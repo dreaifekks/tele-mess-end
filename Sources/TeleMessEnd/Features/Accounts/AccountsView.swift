@@ -3,7 +3,6 @@ import SwiftUI
 struct AccountsView: View {
     @Bindable var model: AppModel
     @State private var selectedAccountID: CoreAccount.ID?
-    @State private var tableSelection: CoreAccount.ID?
     @State private var isCreatingAccount = false
     @State private var isEditingPhone = false
     @State private var accountID = ""
@@ -35,9 +34,7 @@ struct AccountsView: View {
                 if model.accounts.isEmpty {
                     EmptyStateView(title: "No accounts", detail: "Create account metadata, then request a Telegram login code.", systemImage: "person.badge.plus")
                 } else {
-                    AccountsTable(accounts: model.accounts, selection: $tableSelection, activate: { account in
-                        selectAccount(account)
-                    }, requestDelete: { account in
+                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, requestDelete: { account in
                         pendingDeleteAccount = account
                     })
                 }
@@ -45,16 +42,16 @@ struct AccountsView: View {
             .padding(20)
         }
         .navigationTitle("Accounts")
-        .task {
-            if model.accounts.isEmpty {
-                await model.loadAccounts()
-            }
+        .disabled(model.isLoading)
+        .task(id: model.sessionRevision) {
+            resetForSession()
             syncSelectionAfterAccountsChange()
         }
         .onChange(of: selectedAccountID) {
+            code = ""
+            password = ""
             if selectedAccountID != nil {
                 isCreatingAccount = false
-                tableSelection = selectedAccountID
             }
             loadSelectedAccount()
         }
@@ -72,8 +69,9 @@ struct AccountsView: View {
             Button("Delete", role: .destructive) {
                 if let account = pendingDeleteAccount {
                     Task {
-                        await model.deleteAccount(account)
-                        syncSelectionAfterAccountsChange()
+                        if await model.deleteAccount(account) {
+                            syncSelectionAfterAccountsChange()
+                        }
                     }
                 }
                 pendingDeleteAccount = nil
@@ -134,7 +132,7 @@ struct AccountsView: View {
                 Button {
                     Task {
                         let savedAccountID = accountID
-                        await model.createAccount(
+                        let succeeded = await model.createAccount(
                             CreateAccountRequest(
                                 accountID: accountID,
                                 displayName: displayName.nilIfEmpty,
@@ -143,9 +141,11 @@ struct AccountsView: View {
                                 sessionDir: sessionDir.nilIfEmpty
                             )
                         )
-                        selectedAccountID = model.accounts.first { $0.accountID == savedAccountID }?.id
-                        isCreatingAccount = false
-                        isEditingPhone = false
+                        if succeeded {
+                            selectedAccountID = model.accounts.first { $0.accountID == savedAccountID }?.id
+                            isCreatingAccount = false
+                            isEditingPhone = false
+                        }
                     }
                 } label: {
                     Label(isCreatingAccount ? "Add Account" : "Save Account", systemImage: "square.and.arrow.down")
@@ -195,20 +195,11 @@ struct AccountsView: View {
         guard !isCreatingAccount,
               let selectedAccountID,
               let account = model.accounts.first(where: { $0.id == selectedAccountID }) else {
+            if !isCreatingAccount {
+                clearAccountFields()
+            }
             return
         }
-        accountID = account.accountID
-        displayName = account.displayName ?? ""
-        phone = account.phone ?? ""
-        sessionName = account.sessionName ?? account.accountID
-        sessionDir = account.sessionDir ?? ""
-        isEditingPhone = false
-    }
-
-    private func selectAccount(_ account: CoreAccount) {
-        isCreatingAccount = false
-        selectedAccountID = account.id
-        tableSelection = account.id
         accountID = account.accountID
         displayName = account.displayName ?? ""
         phone = account.phone ?? ""
@@ -221,20 +212,35 @@ struct AccountsView: View {
         if isCreatingAccount { return }
         if let selectedAccountID,
            model.accounts.contains(where: { $0.id == selectedAccountID }) {
-            tableSelection = selectedAccountID
             loadSelectedAccount()
             return
         }
         selectedAccountID = model.accounts.first?.id
-        tableSelection = selectedAccountID
         loadSelectedAccount()
+    }
+
+    private func resetForSession() {
+        selectedAccountID = nil
+        isCreatingAccount = false
+        pendingDeleteAccount = nil
+        clearAccountFields()
+    }
+
+    private func clearAccountFields() {
+        isEditingPhone = false
+        accountID = ""
+        displayName = ""
+        phone = ""
+        sessionName = ""
+        sessionDir = ""
+        code = ""
+        password = ""
     }
 }
 
 private struct AccountsTable: View {
     var accounts: [CoreAccount]
     @Binding var selection: CoreAccount.ID?
-    var activate: (CoreAccount) -> Void
     var requestDelete: (CoreAccount) -> Void
 
     var body: some View {
@@ -247,50 +253,26 @@ private struct AccountsTable: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) {
-                    activate(account)
-                }
             }
             TableColumn("Auth") { account in
                 StatusBadge(text: account.authState ?? "unknown", kind: authBadgeKind(for: account))
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        activate(account)
-                    }
             }
             TableColumn("Session") { account in
                 Text(account.sessionName ?? "")
                     .lineLimit(1)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        activate(account)
-                    }
             }
             TableColumn("Phone") { account in
                 Text(DisplayFormat.maskedPhone(account.phone))
                     .lineLimit(1)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        activate(account)
-                    }
             }
             TableColumn("Last Error") { account in
                 Text(account.lastError ?? "")
                     .foregroundStyle(.red)
                     .lineLimit(2)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        activate(account)
-                    }
             }
             TableColumn("Updated") { account in
                 Text(DisplayFormat.shortDateTime(account.authUpdatedAt ?? account.updatedAt))
                     .foregroundStyle(.secondary)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        activate(account)
-                    }
             }
             TableColumn("Delete") { account in
                 Button(role: .destructive) {

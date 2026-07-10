@@ -48,4 +48,57 @@ enum AppSection: String, CaseIterable, Identifiable {
             "stethoscope"
         }
     }
+
+    var requiredEndpointPath: String? {
+        switch self {
+        case .dashboard:
+            nil
+        case .accounts:
+            "/manage/accounts"
+        case .origins:
+            "/manage/origins"
+        case .messages:
+            "/sync/messages"
+        case .media:
+            "/sync/media-files"
+        case .summaries:
+            "/manage/daily-summary-records"
+        case .diagnostics:
+            "/manage/operation-events"
+        }
+    }
+}
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case core
+    case summary
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .core:
+            "Core Settings"
+        case .summary:
+            "Summary Settings"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .core:
+            "Core"
+        case .summary:
+            "Summary"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .core:
+            "server.rack"
+        case .summary:
+            "text.badge.star"
+        }
+    }
 }

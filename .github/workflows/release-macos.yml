@@ -37,9 +37,9 @@ jobs:
             exit 1
           fi
 
-      - name: Run tests
+      - name: Verify source
         shell: bash
-        run: swift test --scratch-path .build
+        run: ./script/verify.sh
 
       - name: Build DMG
         shell: bash

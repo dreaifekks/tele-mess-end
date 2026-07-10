@@ -2,7 +2,13 @@ import Foundation
 import LocalAuthentication
 import Security
 
-struct KeychainStore: Sendable {
+protocol CredentialStore: Sendable {
+    func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String?
+    func saveToken(_ token: String, profileID: UUID) throws
+    func deleteToken(profileID: UUID) throws
+}
+
+struct KeychainStore: CredentialStore, Sendable {
     private let service = "com.dreaifekks.TeleMessEnd.coreToken"
 
     func readToken(profileID: UUID, allowAuthenticationUI: Bool = true) throws -> String? {

@@ -19,6 +19,8 @@ V1 surfaces:
 - Policies and tags: per-origin text/media/download toggles plus chip-style tag
   editing.
 - Messages and search: recent messages and full-text search backed by the core.
+- Daily summaries: Core-owned persisted records, package/summary job progress,
+  soft-delete/restore, schedule scope, and Telegram delivery targets.
 - Diagnostics: operation events, capture cursors, participants, participant
   refresh, and media-file metadata.
 
@@ -33,11 +35,20 @@ The app supports multiple saved core profiles:
 Tokens are treated as secrets and stored in Keychain. Non-secret profile metadata
 can be stored in app preferences.
 
+Selecting a different profile starts a new Core session. Core-derived data and
+feature selections are cleared, in-flight results from the old profile are
+discarded, and the visible section is reloaded against the newly selected Core.
+Local profiles with authentication disabled can run background refreshes without
+opening Keychain UI.
+
 ## Technical Direction
 
 The first implementation should be a native SwiftUI macOS app rather than an
 Electron, Tauri, or web-wrapper app. The current decision record is in
 [`docs/adr/0001-macos-app-stack.md`](docs/adr/0001-macos-app-stack.md).
+
+Profile-session, state-ownership, and verification decisions are recorded in
+[`docs/adr/0002-profile-session-and-state-ownership.md`](docs/adr/0002-profile-session-and-state-ownership.md).
 
 Core API mapping is tracked in
 [`docs/core-api-surface.md`](docs/core-api-surface.md).
@@ -46,9 +57,9 @@ V1 implementation scope is tracked in [`docs/v1-scope.md`](docs/v1-scope.md).
 
 ## Repository Status
 
-This repository now contains the SwiftPM macOS app scaffold, typed core API
-client, core profile/token foundation, first-pass V1 feature views, and the
-project-local Codex Run action.
+This repository contains the SwiftPM macOS app, typed Core API client,
+profile-scoped session/runtime state, Core-owned summary workflows, CI/release
+verification, and the project-local Codex Run action.
 
 Run locally:
 
@@ -84,7 +95,19 @@ uploads it to the matching GitHub Release. Until Developer ID signing is
 configured, that DMG is ad-hoc signed and macOS Gatekeeper will warn on first
 open.
 
-Run Core API contract tests without XCTest:
+Run the complete local verification gate used by CI and releases:
+
+```bash
+./script/verify.sh
+```
+
+It builds the package and runs the mocked Core API contract suite, summary
+settings/DTO tests, profile-session runtime regressions, Markdown parser tests,
+and the SwiftPM test build. The executable suites are intentionally independent
+of XCTest because the supported CommandLineTools environment does not provide a
+usable XCTest or Swift Testing module.
+
+Run only the Core API contract tests:
 
 ```bash
 ./script/test_core_api.sh
@@ -99,9 +122,9 @@ Run a read-only live smoke against a running core:
 CORE_BASE_URL=http://127.0.0.1:8765 CORE_API_TOKEN=your-token ./script/smoke_core_api_live.sh
 ```
 
-This compiles the same typed client and checks `/healthz`, `/sync/state`,
-`/manage/capabilities`, accounts, origins, recent messages, operation events,
-participants, cursors, and media metadata.
+This compiles the same typed client and checks `/healthz`, `/sync/state`, the API
+manifest/capabilities, accounts, origins, recent messages, operation events,
+participants, cursors, media metadata, and read-only daily-summary surfaces.
 
 ## License
 

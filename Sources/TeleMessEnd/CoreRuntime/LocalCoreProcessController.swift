@@ -4,7 +4,10 @@ import Observation
 @MainActor
 @Observable
 final class LocalCoreProcessController {
+    private static let outputCharacterLimit = 200_000
+
     private var process: Process?
+    private var outputPipe: Pipe?
     private var isStopping = false
     var isRunning = false
     var lastOutput = ""
@@ -28,18 +31,20 @@ final class LocalCoreProcessController {
         }
 
         let pipe = Pipe()
+        outputPipe = pipe
         process.standardOutput = pipe
         process.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor in
-                self?.lastOutput += text
+                self?.appendOutput(text)
             }
         }
         process.terminationHandler = { [weak self] process in
             Task { @MainActor in
                 guard let self, self.process === process else { return }
+                self.clearOutputPipe()
                 self.process = nil
                 self.isRunning = false
                 if !self.isStopping && process.terminationStatus != 0 {
@@ -62,8 +67,22 @@ final class LocalCoreProcessController {
 
     func stop() {
         isStopping = process != nil
+        clearOutputPipe()
         process?.terminate()
         process = nil
         isRunning = false
+        isStopping = false
+    }
+
+    private func appendOutput(_ text: String) {
+        lastOutput.append(text)
+        if lastOutput.count > Self.outputCharacterLimit {
+            lastOutput = String(lastOutput.suffix(Self.outputCharacterLimit))
+        }
+    }
+
+    private func clearOutputPipe() {
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        outputPipe = nil
     }
 }

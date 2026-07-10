@@ -20,10 +20,9 @@ struct OriginsView: View {
             }
         }
         .navigationTitle("Origins")
-        .task {
-            if model.origins.isEmpty {
-                await model.loadOrigins()
-            }
+        .disabled(model.isLoading)
+        .task(id: model.sessionRevision) {
+            resetForSession()
         }
         .onChange(of: model.includeArchivedOrigins) {
             Task { await model.loadOrigins() }
@@ -43,6 +42,14 @@ struct OriginsView: View {
                 model.selectedOriginID = managedSelection.first
             }
         }
+    }
+
+    private func resetForSession() {
+        expandedGroups.removeAll()
+        manageMode = false
+        managedSelection.removeAll()
+        sortOrder = []
+        lastClickedOriginID = nil
     }
 
     private var mainContent: some View {
@@ -415,6 +422,10 @@ private struct OriginInspectorView: View {
     @State private var important = false
     @State private var tags = ""
 
+    private var selectedOriginIDs: [CoreOrigin.ID] {
+        selectedOrigins.map(\.id)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -437,10 +448,7 @@ private struct OriginInspectorView: View {
                 Rectangle().fill(.regularMaterial)
             }
         }
-        .onChange(of: model.selectedOriginID) {
-            syncPolicy()
-        }
-        .onChange(of: selectedOrigins) {
+        .onChange(of: selectedOriginIDs) {
             syncPolicy()
         }
         .onAppear(perform: syncPolicy)
@@ -490,8 +498,17 @@ private struct OriginInspectorView: View {
             Toggle("Important", isOn: Binding(
                 get: { important },
                 set: { value in
+                    let previousValue = important
+                    let sessionRevision = model.sessionRevision
                     important = value
-                    Task { await model.setOriginImportant(origin, important: value) }
+                    Task {
+                        if !(await model.setOriginImportant(origin, important: value)) {
+                            if model.sessionRevision == sessionRevision,
+                               selectedOriginIDs == [origin.id] {
+                                important = previousValue
+                            }
+                        }
+                    }
                 }
             ))
 

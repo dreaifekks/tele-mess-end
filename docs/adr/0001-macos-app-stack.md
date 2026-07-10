@@ -23,7 +23,7 @@ Build a native macOS app with SwiftUI and Swift Concurrency.
 
 Primary framework choices:
 
-- App shell: SwiftUI `WindowGroup` for the main app window plus a dedicated
+- App shell: SwiftUI `Window` for the single shared-state main window plus a dedicated
   `Settings` scene for core profiles.
 - Layout: `NavigationSplitView` for module navigation, SwiftUI `Table` for
   origins and other dense management views, and inspectors/sheets for editing.
@@ -161,3 +161,6 @@ Tradeoffs:
   interop if SwiftUI `Table` proves insufficient.
 - API types must be maintained by hand until the core publishes a stable
   OpenAPI schema.
+
+The later profile-session and state-ownership decisions are recorded in
+[`0002-profile-session-and-state-ownership.md`](0002-profile-session-and-state-ownership.md).

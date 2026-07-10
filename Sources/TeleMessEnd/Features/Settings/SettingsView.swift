@@ -1,25 +1,31 @@
 import Foundation
 import SwiftUI
 
+private struct SummarySettingsLoadKey: Hashable {
+    var profileID: UUID?
+    var sessionRevision: UInt64
+    var section: SettingsSection
+}
+
 struct SettingsView: View {
     @Bindable var model: AppModel
-    @State private var settingsPane: SettingsPane = .core
     @State private var draft = CoreProfile.defaultLocal
     @State private var summaryDraft = SummarySettings()
     @State private var token = ""
     @State private var tokenWasEdited = false
     @State private var confirmDeleteProfile = false
+    @State private var summaryOperationID: UUID?
     private let settingsAccent = Color(red: 0.38, green: 0.70, blue: 1.0)
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsPaneSwitcher(selection: $settingsPane, accent: settingsAccent)
+            SettingsPaneSwitcher(selection: $model.settingsSection, accent: settingsAccent)
                 .padding(.top, 18)
                 .padding(.bottom, 12)
 
             Divider()
 
-            switch settingsPane {
+            switch model.settingsSection {
             case .core:
                 coreSettings
                     .padding(24)
@@ -27,27 +33,33 @@ struct SettingsView: View {
                 summarySettings
                     .padding(.horizontal, 28)
                     .padding(.vertical, 22)
+                    .disabled(summaryOperationID != nil || model.isLoading)
             }
         }
         .frame(width: 920, height: 620)
         .tint(settingsAccent)
         .onAppear {
             loadDraft()
-            loadSummaryDraft()
-            Task { await loadSummaryScopeOptionsIfNeeded() }
+            loadSummaryDraftFromStore()
         }
-        .onChange(of: model.profileStore.selectedProfileID) {
+        .onChange(of: model.sessionRevision) {
             loadDraft()
+            loadSummaryDraftFromStore()
         }
-        .onChange(of: settingsPane) {
-            if settingsPane == .summary {
-                Task { await loadSummaryScopeOptionsIfNeeded() }
-            }
+        .task(id: SummarySettingsLoadKey(
+            profileID: model.selectedProfile?.id,
+            sessionRevision: model.sessionRevision,
+            section: model.settingsSection
+        )) {
+            guard model.settingsSection == .summary else { return }
+            await loadSummaryContext(replacingCurrent: true)
         }
         .alert("Delete profile?", isPresented: $confirmDeleteProfile) {
             Button("Delete", role: .destructive) {
-                model.deleteSelectedProfile()
-                loadDraft()
+                if model.deleteSelectedProfile() {
+                    loadDraft()
+                    loadSummaryDraftFromStore()
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -114,8 +126,9 @@ struct SettingsView: View {
                         TextField("Working directory", text: $draft.localWorkingDirectory)
                         HStack {
                             Button {
-                                saveDraft()
-                                model.startLocalCore()
+                                if saveDraft() {
+                                    model.startLocalCore()
+                                }
                             } label: {
                                 Label("Start", systemImage: "play")
                             }
@@ -152,8 +165,9 @@ struct SettingsView: View {
                             Label("Save", systemImage: "checkmark")
                         }
                         Button {
-                            saveDraft()
-                            Task { await model.validateActiveProfile() }
+                            if saveDraft() {
+                                Task { await model.validateActiveProfile() }
+                            }
                         } label: {
                             Label("Test Connection", systemImage: "network")
                         }
@@ -168,14 +182,14 @@ struct SettingsView: View {
 
                     HStack {
                         Button {
-                            draft = model.profileStore.addRemoteProfile()
+                            draft = model.addRemoteProfile()
                             token = ""
                         } label: {
                             Label("Add Remote Core", systemImage: "plus")
                         }
                         Spacer()
                         Button {
-                            draft = model.profileStore.addLocalProfile()
+                            draft = model.addLocalProfile()
                             token = ""
                         } label: {
                             Label("Add Local Core", systemImage: "plus")
@@ -213,10 +227,6 @@ struct SettingsView: View {
                                 .frame(width: 170)
                         }
                     }
-                    PreferenceDivider()
-                    PreferenceRow(title: "Lookback") {
-                        ValueStepper(value: $summaryDraft.lookbackHours, range: 1...168, suffix: "hours")
-                    }
                 }
 
                 PreferenceGroup(
@@ -227,20 +237,20 @@ struct SettingsView: View {
                         ScopeSingleSelectMenu(
                             selection: accountSelection,
                             placeholder: "Any account",
-                            options: scopeAccountOptions.map { ScopePickerOption(value: $0, title: $0) }
+                            options: targetOptions.scopeAccountIDs.map { ScopePickerOption(value: $0, title: $0) }
                         )
                     }
                     PreferenceDivider()
                     PreferenceRow(title: "Origin ID") {
-                        ScopeSingleSelectMenu(selection: originSelection, placeholder: "Any origin", options: scopeOriginOptions)
+                        ScopeSingleSelectMenu(selection: originSelection, placeholder: "Any origin", options: targetOptions.scopeOrigins)
                     }
                     PreferenceDivider()
                     PreferenceRow(title: "Topic ID") {
-                        ScopeSingleSelectMenu(selection: topicSelection, placeholder: "Any topic", options: scopeTopicOptions)
+                        ScopeSingleSelectMenu(selection: topicSelection, placeholder: "Any topic", options: targetOptions.scopeTopics)
                     }
                     PreferenceDivider()
                     PreferenceRow(title: "Tags") {
-                        TagMultiSelectMenu(tagsText: $summaryDraft.tags, options: scopeTagOptions)
+                        TagMultiSelectMenu(tagsText: $summaryDraft.tags, options: targetOptions.scopeTags)
                             .frame(width: 260)
                     }
                     PreferenceDivider()
@@ -264,7 +274,7 @@ struct SettingsView: View {
                             ScopeSingleSelectMenu(
                                 selection: deliveryAccountSelection,
                                 placeholder: "Select account",
-                                options: deliveryAccountOptions
+                                options: targetOptions.deliveryAccounts
                             )
                             Button {
                                 Task { await discoverDeliveryTargets() }
@@ -282,7 +292,7 @@ struct SettingsView: View {
                         ScopeSingleSelectMenu(
                             selection: deliveryOriginSelection,
                             placeholder: "Select group",
-                            options: deliveryOriginOptions
+                            options: targetOptions.deliveryOrigins
                         )
                     }
                     .disabled(!summaryDraft.deliveryEnabled || summaryDraft.deliveryAccountID.isEmpty)
@@ -291,7 +301,7 @@ struct SettingsView: View {
                         ScopeSingleSelectMenu(
                             selection: deliveryTopicSelection,
                             placeholder: "Group root",
-                            options: deliveryTopicOptions
+                            options: targetOptions.deliveryTopics
                         )
                     }
                     .disabled(!summaryDraft.deliveryEnabled || summaryDraft.deliveryOriginID.isEmpty)
@@ -322,7 +332,7 @@ struct SettingsView: View {
                         }
                         .disabled(!summaryDraftCanSave)
                         Button {
-                            Task { await loadSummarySchedule() }
+                            Task { await loadSummaryContext() }
                         } label: {
                             Label("Load From Core", systemImage: "arrow.down.circle")
                         }
@@ -343,9 +353,13 @@ struct SettingsView: View {
         }
     }
 
-    private func saveDraft() {
-        model.saveProfile(draft, token: tokenWasEdited ? token : nil)
-        tokenWasEdited = false
+    @discardableResult
+    private func saveDraft() -> Bool {
+        let succeeded = model.saveProfile(draft, token: tokenWasEdited ? token : nil)
+        if succeeded {
+            tokenWasEdited = false
+        }
+        return succeeded
     }
 
     private func loadDraft() {
@@ -355,24 +369,44 @@ struct SettingsView: View {
     }
 
     private func saveSummaryDraft() async {
-        await model.saveSummarySchedule(summaryDraft)
-        loadSummaryDraftFromStore()
-    }
-
-    private func loadSummaryDraft() {
-        loadSummaryDraftFromStore()
-        Task { await loadSummarySchedule() }
-    }
-
-    private func loadSummarySchedule() async {
-        await model.loadSummarySchedule()
-        loadSummaryDraftFromStore()
-    }
-
-    private func loadSummaryScopeOptionsIfNeeded() async {
-        if model.accounts.isEmpty || model.origins.isEmpty {
-            await model.loadSummaryScopeOptions()
+        guard summaryOperationID == nil, !model.isLoading else { return }
+        let operationID = UUID()
+        summaryOperationID = operationID
+        defer {
+            if summaryOperationID == operationID {
+                summaryOperationID = nil
+            }
         }
+        if await model.saveSummarySchedule(summaryDraft), !Task.isCancelled {
+            loadSummaryDraftFromStore()
+        }
+    }
+
+    private func loadSummaryContext(replacingCurrent: Bool = false) async {
+        guard replacingCurrent || summaryOperationID == nil else { return }
+        let operationID = UUID()
+        summaryOperationID = operationID
+        defer {
+            if summaryOperationID == operationID {
+                summaryOperationID = nil
+            }
+        }
+
+        while model.isLoading {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return
+            }
+        }
+        guard !Task.isCancelled,
+              model.settingsSection == .summary else { return }
+        let profileID = model.selectedProfile?.id
+        guard await model.loadSummarySchedule(),
+              !Task.isCancelled,
+              model.selectedProfile?.id == profileID else { return }
+        loadSummaryDraftFromStore()
+        await model.loadSummaryScopeOptions()
     }
 
     private func loadSummaryDraftFromStore() {
@@ -440,100 +474,8 @@ struct SettingsView: View {
             (!summaryDraft.deliveryAccountID.isEmpty && Int(summaryDraft.deliveryOriginID) != nil)
     }
 
-    private var scopeAccountOptions: [String] {
-        Array(Set(model.accounts.map(\.accountID) + model.origins.map(\.accountID))).sorted()
-    }
-
-    private var deliveryAccountOptions: [ScopePickerOption] {
-        scopeAccountOptions.map { accountID in
-            if let account = model.accounts.first(where: { $0.accountID == accountID }),
-               account.title != accountID {
-                return ScopePickerOption(value: accountID, title: "\(account.title)  \(accountID)")
-            }
-            return ScopePickerOption(value: accountID, title: accountID)
-        }
-    }
-
-    private var scopeOriginOptions: [ScopePickerOption] {
-        let rows = model.origins.filter { origin in
-            summaryDraft.accountID.isEmpty || origin.accountID == summaryDraft.accountID
-        }
-        var grouped: [Int: CoreOrigin] = [:]
-        for origin in rows {
-            if grouped[origin.originID] == nil || !origin.isTopic {
-                grouped[origin.originID] = origin
-            }
-        }
-        return grouped.values
-            .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
-            .map { origin in
-                ScopePickerOption(
-                    value: String(origin.originID),
-                    title: "\(origin.displayTitle)  \(origin.originID)"
-                )
-            }
-    }
-
-    private var scopeTopicOptions: [ScopePickerOption] {
-        var seen = Set<String>()
-        return model.origins
-            .filter { origin in
-                origin.isTopic &&
-                (summaryDraft.accountID.isEmpty || origin.accountID == summaryDraft.accountID) &&
-                (summaryDraft.originID.isEmpty || String(origin.originID) == summaryDraft.originID)
-            }
-            .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
-            .compactMap { origin in
-                let value = String(origin.topicID)
-                guard seen.insert(value).inserted else { return nil }
-                return ScopePickerOption(
-                    value: value,
-                    title: "\(origin.displayTitle)  \(origin.topicID)"
-                )
-            }
-    }
-
-    private var deliveryOriginOptions: [ScopePickerOption] {
-        let rows = model.origins.filter { origin in
-            summaryDraft.deliveryAccountID.isEmpty || origin.accountID == summaryDraft.deliveryAccountID
-        }
-        var grouped: [Int: CoreOrigin] = [:]
-        for origin in rows {
-            if !origin.isTopic || grouped[origin.originID] == nil {
-                grouped[origin.originID] = origin
-            }
-        }
-        return grouped.values
-            .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
-            .map { origin in
-                ScopePickerOption(
-                    value: String(origin.originID),
-                    title: "\(origin.displayTitle)  \(origin.originID)"
-                )
-            }
-    }
-
-    private var deliveryTopicOptions: [ScopePickerOption] {
-        model.origins
-            .filter { origin in
-                origin.isTopic &&
-                (summaryDraft.deliveryAccountID.isEmpty || origin.accountID == summaryDraft.deliveryAccountID) &&
-                (summaryDraft.deliveryOriginID.isEmpty || String(origin.originID) == summaryDraft.deliveryOriginID)
-            }
-            .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
-            .map { origin in
-                ScopePickerOption(
-                    value: String(origin.topicID),
-                    title: "\(origin.displayTitle)  \(origin.topicID)"
-                )
-            }
-    }
-
-    private var scopeTagOptions: [String] {
-        let tags = model.origins.flatMap { origin in
-            Self.splitTags(origin.backupPolicy?.tags ?? "")
-        }
-        return Array(Set(tags)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    private var targetOptions: SummaryTargetOptions {
+        SummaryTargetOptions(accounts: model.summaryScopeAccounts, origins: model.summaryScopeOrigins, draft: summaryDraft)
     }
 
     private func discoverDeliveryTargets() async {
@@ -541,63 +483,15 @@ struct SettingsView: View {
         await model.discoverSummaryScopeOptions(accountID: summaryDraft.deliveryAccountID)
     }
 
-    private static func splitTags(_ value: String) -> [String] {
-        value
-            .split { character in
-                character == "," || character == ";" || character == " " || character == "\n" || character == "\t"
-            }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-}
-
-private struct ScopePickerOption: Identifiable, Hashable {
-    var value: String
-    var title: String
-    var id: String { value }
-}
-
-private enum SettingsPane: String, CaseIterable, Identifiable {
-    case core
-    case summary
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .core:
-            "Core Settings"
-        case .summary:
-            "Summary Settings"
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .core:
-            "Core"
-        case .summary:
-            "Summary"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .core:
-            "server.rack"
-        case .summary:
-            "text.badge.star"
-        }
-    }
 }
 
 private struct SettingsPaneSwitcher: View {
-    @Binding var selection: SettingsPane
+    @Binding var selection: SettingsSection
     var accent: Color
 
     var body: some View {
         HStack(alignment: .top, spacing: 20) {
-            ForEach(SettingsPane.allCases) { pane in
+            ForEach(SettingsSection.allCases) { pane in
                 Button {
                     selection = pane
                 } label: {
@@ -865,21 +759,5 @@ private struct TimeStepper: View {
         }
         .controlSize(.small)
         .frame(width: 105)
-    }
-}
-
-private struct ValueStepper: View {
-    @Binding var value: Int
-    var range: ClosedRange<Int>
-    var suffix: String
-
-    var body: some View {
-        Stepper(value: $value, in: range) {
-            Text("\(value) \(suffix)")
-                .font(.body.monospacedDigit().weight(.medium))
-                .frame(width: 118, alignment: .trailing)
-        }
-        .controlSize(.small)
-        .frame(width: 160)
     }
 }

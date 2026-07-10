@@ -5,6 +5,7 @@ import Observation
 struct DashboardState {
     var coreState: CoreState?
     var capabilities: CoreCapabilities?
+    var apiManifest: CoreAPIManifest?
     var recentMessages: [CoreMessage] = []
     var operationEvents: [CoreOperationEvent] = []
 }
@@ -12,6 +13,30 @@ struct DashboardState {
 private struct CachedProfileToken {
     var profileID: UUID
     var token: String?
+}
+
+private struct CoreSessionContext {
+    var profileID: UUID
+    var generation: UInt64
+    var client: CoreAPIClient
+}
+
+private struct DailySummaryStateSnapshot {
+    var records: [DailySummaryRecord]
+    var packageRuns: [DailyPackageRun]
+    var summaryRuns: [DailySummaryRun]
+    var jobs: [DailySummaryJob]
+}
+
+private struct PartialMutationError: LocalizedError {
+    var action: String
+    var completed: Int
+    var total: Int
+    var underlyingError: Error
+
+    var errorDescription: String? {
+        "\(action) completed for \(completed) of \(total) items before failing: \(underlyingError.localizedDescription)"
+    }
 }
 
 private let recentMessageRefreshIntervalNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
@@ -22,7 +47,10 @@ private enum TokenReadMode {
     case cacheOnly
 }
 
-private let hiddenDailySummaryIDsKey = "TeleMessEnd.hiddenDailySummaryIDs"
+private enum OperationScope: Hashable {
+    case exclusive
+    case messages
+}
 
 enum CoreValidationStatus {
     case unverified
@@ -82,29 +110,35 @@ enum DiagnosticsSection: String, CaseIterable, Identifiable {
 final class AppModel {
     let profileStore: CoreProfileStore
     let summarySettingsStore: SummarySettingsStore
-    let originImportanceStore: OriginImportanceStore
-    let keychain = KeychainStore()
-    let localRunner = LocalCoreProcessController()
+    let keychain: any CredentialStore
+    let localRunner: LocalCoreProcessController
+    @ObservationIgnored private let transport: any CoreHTTPTransport
     @ObservationIgnored private var tokenCache: CachedProfileToken?
     @ObservationIgnored private var isRecentMessageRefreshLoopRunning = false
     @ObservationIgnored private var isDailySummaryProgressLoopRunning = false
+    @ObservationIgnored private var activeOperations: [UUID: OperationScope] = [:]
+    @ObservationIgnored private var latestOperationIDs: [OperationScope: UUID] = [:]
+    @ObservationIgnored private var messageRequestRevision: UInt64 = 0
+    @ObservationIgnored private var dailySummaryRequestRevision: UInt64 = 0
+    @ObservationIgnored private var compatibilityCheckedSessionRevision: UInt64?
 
     var selectedSection: AppSection = .dashboard
+    var settingsSection: SettingsSection = .core
+    private(set) var sessionRevision: UInt64 = 0
     var dashboard = DashboardState()
     var accounts: [CoreAccount] = []
     var origins: [CoreOrigin] = []
+    var summaryScopeAccounts: [CoreAccount] = []
+    var summaryScopeOrigins: [CoreOrigin] = []
     var messages: [CoreMessage] = []
     var participants: [CoreParticipant] = []
     var cursors: [CoreCaptureCursor] = []
     var mediaFiles: [CoreMediaFile] = []
     var operationEvents: [CoreOperationEvent] = []
-    var dailySummaries: [DailyGroupSummary] = []
     var dailySummaryRecords: [DailySummaryRecord] = []
     var dailyPackageRuns: [DailyPackageRun] = []
     var dailySummaryRuns: [DailySummaryRun] = []
     var dailySummaryJobs: [DailySummaryJob] = []
-    var hiddenDailySummaryIDs: Set<String> = []
-
     var isLoading = false
     var statusMessage = "Ready"
     var lastError: String?
@@ -133,22 +167,69 @@ final class AppModel {
     init(
         profileStore: CoreProfileStore? = nil,
         summarySettingsStore: SummarySettingsStore? = nil,
-        originImportanceStore: OriginImportanceStore? = nil
+        keychain: any CredentialStore = KeychainStore(),
+        localRunner: LocalCoreProcessController? = nil,
+        transport: any CoreHTTPTransport = URLSession.shared
     ) {
-        self.profileStore = profileStore ?? CoreProfileStore()
-        self.summarySettingsStore = summarySettingsStore ?? SummarySettingsStore()
-        self.originImportanceStore = originImportanceStore ?? OriginImportanceStore()
-        self.hiddenDailySummaryIDs = Set(UserDefaults.standard.stringArray(forKey: hiddenDailySummaryIDsKey) ?? [])
+        let resolvedProfileStore = profileStore ?? CoreProfileStore()
+        let resolvedSummarySettingsStore = summarySettingsStore ?? SummarySettingsStore()
+        self.profileStore = resolvedProfileStore
+        self.summarySettingsStore = resolvedSummarySettingsStore
+        self.keychain = keychain
+        self.localRunner = localRunner ?? LocalCoreProcessController()
+        self.transport = transport
+        resolvedSummarySettingsStore.selectProfile(resolvedProfileStore.selectedProfileID)
     }
 
     var selectedProfile: CoreProfile? {
         profileStore.selectedProfile
     }
 
+    var availableSections: [AppSection] {
+        guard let manifest = dashboard.apiManifest else {
+            return AppSection.allCases
+        }
+        let paths = Set(manifest.endpoints.compactMap { endpoint -> String? in
+            switch endpoint {
+            case .string(let path):
+                return path
+            case .object(let value):
+                guard case .string(let path)? = value["path"] else { return nil }
+                return path
+            default:
+                return nil
+            }
+        })
+        return AppSection.allCases.filter { section in
+            guard let requiredEndpointPath = section.requiredEndpointPath else { return true }
+            return paths.contains(requiredEndpointPath)
+        }
+    }
+
     func selectProfile(_ id: UUID?) {
-        profileStore.select(id)
-        tokenCache = nil
-        validationStatus = .unverified
+        let resolvedID: UUID?
+        if let id, profileStore.profiles.contains(where: { $0.id == id }) {
+            resolvedID = id
+        } else {
+            resolvedID = profileStore.profiles.first?.id
+        }
+        guard profileStore.selectedProfileID != resolvedID else { return }
+        profileStore.select(resolvedID)
+        beginProfileSession()
+    }
+
+    @discardableResult
+    func addRemoteProfile() -> CoreProfile {
+        let profile = profileStore.addRemoteProfile()
+        beginProfileSession()
+        return profile
+    }
+
+    @discardableResult
+    func addLocalProfile() -> CoreProfile {
+        let profile = profileStore.addLocalProfile()
+        beginProfileSession()
+        return profile
     }
 
     var selectedOrigin: CoreOrigin? {
@@ -208,23 +289,37 @@ final class AppModel {
         return sortOrigins(filtered)
     }
 
-    func refreshCurrentSection() async {
+    func refreshCurrentSection(allowKeychainUI: Bool = true) async {
         switch selectedSection {
         case .dashboard:
-            await loadDashboard()
+            await loadDashboard(allowKeychainUI: allowKeychainUI)
         case .accounts:
-            await loadAccounts()
+            await loadAccounts(allowKeychainUI: allowKeychainUI)
         case .origins:
-            await loadOrigins()
+            await loadOrigins(allowKeychainUI: allowKeychainUI)
         case .messages:
-            await loadRecentMessages()
+            await loadRecentMessages(allowKeychainUI: allowKeychainUI)
         case .media:
-            await loadMediaFiles()
+            await loadMediaFiles(allowKeychainUI: allowKeychainUI)
         case .summaries:
-            await refreshDailySummaryProgress()
+            await refreshDailySummaryProgress(allowKeychainUI: allowKeychainUI)
         case .diagnostics:
-            await loadDiagnostics()
+            await loadDiagnostics(allowKeychainUI: allowKeychainUI)
         }
+    }
+
+    func refreshCurrentSectionWhenIdle(allowKeychainUI: Bool = true) async {
+        while isLoading {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return
+            }
+        }
+        guard !Task.isCancelled else { return }
+        guard await ensureCompatibility(allowKeychainUI: allowKeychainUI),
+              !Task.isCancelled else { return }
+        await refreshCurrentSection(allowKeychainUI: allowKeychainUI)
     }
 
     func runRecentMessageRefreshLoop() async {
@@ -253,96 +348,146 @@ final class AppModel {
     }
 
     func validateActiveProfile() async {
+        guard validationStatus != .validating else { return }
+        let validationRevision = sessionRevision
         validationStatus = .validating
-        await withLoading("Validating profile") {
-            let client = try makeClient()
-            _ = try await client.health()
-            try await reloadDashboard(using: client)
+        while isLoading {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                if validationRevision == sessionRevision, validationStatus == .validating {
+                    validationStatus = .unverified
+                }
+                return
+            }
+        }
+        guard validationRevision == sessionRevision else { return }
+        guard !Task.isCancelled else {
+            validationStatus = .unverified
+            return
+        }
+        let succeeded = await withLoading("Validating profile") { session in
+            let messageRevision = beginMessageRequest()
+            _ = try await session.client.health()
+            let snapshot = try await fetchDashboardSnapshot(using: session.client)
+            try ensureCurrent(session)
+            applyDashboardSnapshot(snapshot, messageRevision: messageRevision)
+            compatibilityCheckedSessionRevision = validationRevision
             validationStatus = .verified
             statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
         }
-        if lastError != nil {
-            validationStatus = .failed
+        if !succeeded, validationStatus == .validating {
+            validationStatus = Task.isCancelled ? .unverified : .failed
+        } else if succeeded, selectedSection != .dashboard {
+            await refreshCurrentSectionWhenIdle(allowKeychainUI: true)
         }
     }
 
     func loadDashboard(allowKeychainUI: Bool = true) async {
         let tokenReadMode: TokenReadMode = allowKeychainUI ? .promptIfNeeded : .cacheOnly
-        if tokenReadMode == .cacheOnly && !hasCachedTokenForSelectedProfile {
-            return
-        }
-
-        await withLoading("Loading dashboard") {
-            let client = try makeClient(tokenReadMode: tokenReadMode)
-            try await reloadDashboard(using: client)
+        await withLoading("Loading dashboard", tokenReadMode: tokenReadMode) { session in
+            let messageRevision = beginMessageRequest()
+            let snapshot = try await fetchDashboardSnapshot(using: session.client)
+            try ensureCurrent(session)
+            applyDashboardSnapshot(snapshot, messageRevision: messageRevision)
             statusMessage = "Dashboard refreshed"
         }
     }
 
     func refreshRecentMessagesInBackground() async {
         guard !isLoading else { return }
-        guard hasCachedTokenForSelectedProfile else { return }
+        let requestRevision = beginMessageRequest()
         do {
-            let messages = try await fetchRecentMessages(tokenReadMode: .cacheOnly)
-            dashboard.recentMessages = messages
+            let session = try makeSession(tokenReadMode: .cacheOnly)
+            let loadedMessages = try await session.client.fetchRecentMessages(limit: 100, includeMedia: true).items
+            try ensureCurrent(session, messageRevision: requestRevision)
+            dashboard.recentMessages = loadedMessages
             if messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                self.messages = messages
+                messages = loadedMessages
             }
         } catch {
             return
         }
     }
 
-    func loadAccounts() async {
-        await withLoading("Loading accounts") {
-            accounts = try await makeClient().listManagementAccounts()
+    func loadAccounts(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Loading accounts",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let loadedAccounts = try await session.client.listManagementAccounts()
+            try ensureCurrent(session)
+            accounts = loadedAccounts
             statusMessage = "Loaded \(accounts.count) accounts"
         }
     }
 
-    func createAccount(_ request: CreateAccountRequest) async {
-        await withLoading("Saving account") {
-            _ = try await makeClient().createAccount(request)
-            accounts = try await makeClient().listManagementAccounts()
-            statusMessage = "Account saved"
+    @discardableResult
+    func createAccount(_ request: CreateAccountRequest) async -> Bool {
+        await withLoading("Saving account") { session in
+            let createdAccount = try await session.client.createAccount(request)
+            try ensureCurrent(session)
+            upsertAccount(createdAccount)
+            let refreshed = try await refreshAccountsIfAvailable(using: session)
+            statusMessage = refreshed ? "Account saved" : "Account saved; refresh pending"
         }
     }
 
-    func deleteAccount(_ account: CoreAccount) async {
-        await withLoading("Deleting account") {
-            _ = try await makeClient().deleteAccount(accountID: account.accountID, source: account.source)
-            accounts = try await makeClient().listManagementAccounts()
-            statusMessage = "Account metadata deleted"
+    @discardableResult
+    func deleteAccount(_ account: CoreAccount) async -> Bool {
+        await withLoading("Deleting account") { session in
+            _ = try await session.client.deleteAccount(accountID: account.accountID, source: account.source)
+            try ensureCurrent(session)
+            accounts.removeAll { $0.id == account.id }
+            let refreshed = try await refreshAccountsIfAvailable(using: session)
+            statusMessage = refreshed ? "Account metadata deleted" : "Account deleted; refresh pending"
         }
     }
 
-    func authStatus(accountID: String) async {
-        await withLoading("Checking auth") {
-            let result = try await makeClient().authStatus(accountID: accountID)
-            accounts = try await makeClient().listManagementAccounts()
-            statusMessage = result.status ?? result.authState ?? "Auth status updated"
+    @discardableResult
+    func authStatus(accountID: String) async -> Bool {
+        await withLoading("Checking auth") { session in
+            let result = try await session.client.authStatus(accountID: accountID)
+            try ensureCurrent(session)
+            let refreshed = try await refreshAccountsIfAvailable(using: session)
+            let message = result.status ?? result.authState ?? "Auth status updated"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func requestCode(accountID: String, phone: String) async {
-        await withLoading("Requesting code") {
-            let result = try await makeClient().requestCode(accountID: accountID, phone: phone)
-            accounts = try await makeClient().listManagementAccounts()
-            statusMessage = result.message ?? result.status ?? "Code requested"
+    @discardableResult
+    func requestCode(accountID: String, phone: String) async -> Bool {
+        await withLoading("Requesting code") { session in
+            let result = try await session.client.requestCode(accountID: accountID, phone: phone)
+            try ensureCurrent(session)
+            let refreshed = try await refreshAccountsIfAvailable(using: session)
+            let message = result.message ?? result.status ?? "Code requested"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func submitCode(accountID: String, phone: String, code: String, password: String?) async {
-        await withLoading("Submitting code") {
-            let result = try await makeClient().submitCode(accountID: accountID, phone: phone, code: code, password: password?.nilIfEmpty)
-            accounts = try await makeClient().listManagementAccounts()
-            statusMessage = result.message ?? result.status ?? result.authState ?? "Code submitted"
+    @discardableResult
+    func submitCode(accountID: String, phone: String, code: String, password: String?) async -> Bool {
+        await withLoading("Submitting code") { session in
+            let result = try await session.client.submitCode(accountID: accountID, phone: phone, code: code, password: password?.nilIfEmpty)
+            try ensureCurrent(session)
+            let refreshed = try await refreshAccountsIfAvailable(using: session)
+            let message = result.message ?? result.status ?? result.authState ?? "Code submitted"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func loadOrigins() async {
-        await withLoading("Loading origins") {
-            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins))
+    func loadOrigins(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Loading origins",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let loadedOrigins = try await session.client.listOrigins(
+                accountID: originAccountFilter.nilIfEmpty,
+                includeArchived: includeArchivedOrigins
+            )
+            try ensureCurrent(session)
+            origins = loadedOrigins
             if selectedOriginID == nil {
                 selectedOriginID = origins.first?.id
             }
@@ -351,103 +496,129 @@ final class AppModel {
     }
 
     func discoverOrigins(accountID: String) async {
-        await withLoading("Discovering origins") {
-            let result = try await makeClient().discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
-            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: accountID, includeArchived: includeArchivedOrigins))
-            statusMessage = result.message ?? "Discovery finished"
+        await withLoading("Discovering origins") { session in
+            let result = try await session.client.discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
+            try ensureCurrent(session)
+            let refreshed = try await refreshOriginsIfAvailable(using: session)
+            let message = result.message ?? "Discovery finished"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
     func loadSummaryScopeOptions() async {
-        await withLoading("Loading summary scope options") {
-            let client = try makeClient()
-            async let loadedAccounts = client.listManagementAccounts()
-            async let loadedOrigins = client.listOrigins(accountID: nil, includeArchived: false)
-            accounts = try await loadedAccounts
-            origins = originImportanceStore.apply(to: try await loadedOrigins)
+        await withLoading("Loading summary scope options") { session in
+            async let accountsRequest = session.client.listManagementAccounts()
+            async let originsRequest = session.client.listOrigins(accountID: nil, includeArchived: false)
+            let snapshot = try await (accountsRequest, originsRequest)
+            try ensureCurrent(session)
+            summaryScopeAccounts = snapshot.0
+            summaryScopeOrigins = snapshot.1
             statusMessage = "Loaded summary scope options"
         }
     }
 
     func discoverSummaryScopeOptions(accountID: String) async {
-        await withLoading("Discovering summary delivery targets") {
-            let client = try makeClient()
-            let result = try await client.discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
-            async let loadedAccounts = client.listManagementAccounts()
-            async let loadedOrigins = client.listOrigins(accountID: nil, includeArchived: false)
-            accounts = try await loadedAccounts
-            origins = originImportanceStore.apply(to: try await loadedOrigins)
-            statusMessage = result.message ?? "Summary delivery targets refreshed"
+        await withLoading("Discovering summary delivery targets") { session in
+            let result = try await session.client.discoverOrigins(accountID: accountID, includeTopics: true, includePrivate: false, topicLimit: 500)
+            try ensureCurrent(session)
+            let refreshed = try await refreshSummaryScopeIfAvailable(using: session)
+            let message = result.message ?? "Summary delivery targets refreshed"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func archiveSelectedOrigin(_ archived: Bool) async {
-        guard let origin = selectedOrigin else { return }
-        await archiveOrigins([origin], archived: archived)
-    }
-
-    func archiveOrigins(_ selectedOrigins: [CoreOrigin], archived: Bool) async {
+    @discardableResult
+    func archiveOrigins(_ selectedOrigins: [CoreOrigin], archived: Bool) async -> Bool {
         let targets = affectedOrigins(for: selectedOrigins)
-        guard !targets.isEmpty else { return }
-        await withLoading(archived ? "Archiving origin" : "Restoring origin") {
-            let client = try makeClient()
-            for origin in targets {
-                _ = try await client.archiveOrigin(
-                    ArchiveOriginRequest(
-                        accountID: origin.accountID,
-                        originID: origin.originID,
-                        topicID: origin.topicID,
-                        archived: archived,
-                        source: origin.source
+        guard !targets.isEmpty else { return false }
+        return await withLoading(archived ? "Archiving origin" : "Restoring origin") { session in
+            var completed = 0
+            do {
+                for origin in targets {
+                    _ = try await session.client.archiveOrigin(
+                        ArchiveOriginRequest(
+                            accountID: origin.accountID,
+                            originID: origin.originID,
+                            topicID: origin.topicID,
+                            archived: archived,
+                            source: origin.source
+                        )
                     )
-                )
+                    try ensureCurrent(session)
+                    applyArchiveLocally(origin, archived: archived)
+                    completed += 1
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if completed > 0 {
+                    _ = try? await refreshOriginsIfAvailable(using: session)
+                    throw PartialMutationError(
+                        action: archived ? "Archive" : "Restore",
+                        completed: completed,
+                        total: targets.count,
+                        underlyingError: error
+                    )
+                }
+                throw error
             }
-            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins))
-            statusMessage = archived ? "Origin archived" : "Origin restored"
+            try ensureCurrent(session)
+            let refreshed = try await refreshOriginsIfAvailable(using: session)
+            let message = archived ? "Origin archived" : "Origin restored"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func deleteSelectedOrigin() async {
-        guard let origin = selectedOrigin else { return }
-        await deleteOrigins([origin])
-    }
-
-    func deleteOrigins(_ selectedOrigins: [CoreOrigin]) async {
-        await archiveOrigins(selectedOrigins, archived: true)
-    }
-
-    func savePolicy(for origin: CoreOrigin, policy: CoreBackupPolicy) async {
+    @discardableResult
+    func savePolicy(for origin: CoreOrigin, policy: CoreBackupPolicy) async -> Bool {
         let targets = affectedOrigins(for: [origin])
-        await withLoading("Saving policy") {
-            let client = try makeClient()
-            for target in targets {
-                _ = try await client.setBackupPolicy(
-                    BackupPolicyRequest(
-                        accountID: target.accountID,
-                        originID: target.originID,
-                        topicID: target.topicID,
-                        enabled: policy.enabled,
-                        captureText: policy.captureText,
-                        captureMediaMetadata: policy.captureMediaMetadata,
-                        downloadMedia: policy.downloadMedia,
-                        tags: policy.tags,
-                        source: target.source
+        return await withLoading("Saving policy") { session in
+            var completed = 0
+            do {
+                for target in targets {
+                    let updatedPolicy = try await session.client.setBackupPolicy(
+                        BackupPolicyRequest(
+                            accountID: target.accountID,
+                            originID: target.originID,
+                            topicID: target.topicID,
+                            enabled: policy.enabled,
+                            captureText: policy.captureText,
+                            captureMediaMetadata: policy.captureMediaMetadata,
+                            downloadMedia: policy.downloadMedia,
+                            tags: policy.tags,
+                            source: target.source
+                        )
                     )
-                )
+                    try ensureCurrent(session)
+                    if let index = origins.firstIndex(where: { $0.id == target.id }) {
+                        origins[index].backupPolicy = updatedPolicy
+                    }
+                    completed += 1
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if completed > 0 {
+                    _ = try? await refreshOriginsIfAvailable(using: session)
+                    throw PartialMutationError(
+                        action: "Policy save",
+                        completed: completed,
+                        total: targets.count,
+                        underlyingError: error
+                    )
+                }
+                throw error
             }
-            origins = originImportanceStore.apply(to: try await makeClient().listOrigins(accountID: originAccountFilter.nilIfEmpty, includeArchived: includeArchivedOrigins))
-            statusMessage = "Policy saved"
+            try ensureCurrent(session)
+            let refreshed = try await refreshOriginsIfAvailable(using: session)
+            statusMessage = refreshed ? "Policy saved" : "Policy saved; refresh pending"
         }
     }
 
-    func setOriginImportant(_ origin: CoreOrigin, important: Bool) async {
-        let previousImportant = origin.important
-        updateOriginImportantLocally(origin, important: important)
-        isLoading = true
-        lastError = nil
-        statusMessage = important ? "Marking important" : "Clearing important"
-        do {
-            let updated = try await makeClient().setOriginImportant(
+    @discardableResult
+    func setOriginImportant(_ origin: CoreOrigin, important: Bool) async -> Bool {
+        await withLoading(important ? "Marking important" : "Clearing important") { session in
+            let updated = try await session.client.setOriginImportant(
                 OriginImportantRequest(
                     accountID: origin.accountID,
                     originID: origin.originID,
@@ -456,22 +627,23 @@ final class AppModel {
                     source: origin.source
                 )
             )
-            originImportanceStore.set(nil, for: origin)
+            try ensureCurrent(session)
             replaceOrigin(updated)
             statusMessage = important ? "Origin marked important" : "Origin unmarked"
-        } catch {
-            lastError = error.localizedDescription
-            updateOriginImportantLocally(origin, important: previousImportant)
-            statusMessage = "Failed"
         }
-        isLoading = false
     }
 
-    func loadRecentMessages() async {
-        await withLoading("Loading messages") {
-            let recentMessages = try await fetchRecentMessages()
-            messages = recentMessages
-            dashboard.recentMessages = recentMessages
+    func loadRecentMessages(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Loading messages",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly,
+            scope: .messages
+        ) { session in
+            let requestRevision = beginMessageRequest()
+            let loadedMessages = try await session.client.fetchRecentMessages(limit: 100, includeMedia: true).items
+            try ensureCurrent(session, messageRevision: requestRevision)
+            messages = loadedMessages
+            dashboard.recentMessages = loadedMessages
             statusMessage = "Loaded recent messages"
         }
     }
@@ -482,35 +654,43 @@ final class AppModel {
             await loadRecentMessages()
             return
         }
-        await withLoading("Searching messages") {
-            messages = try await makeClient().searchMessages(query: query, limit: 100, includeMedia: true)
+        await withLoading("Searching messages", scope: .messages) { session in
+            let requestRevision = beginMessageRequest()
+            let loadedMessages = try await session.client.searchMessages(query: query, limit: 100, includeMedia: true)
+            try ensureCurrent(session, messageRevision: requestRevision)
+            messages = loadedMessages
             statusMessage = "Search returned \(messages.count) messages"
         }
     }
 
-    func loadMediaFiles() async {
-        await withLoading("Loading media") {
-            mediaFiles = try await makeClient().listMediaFiles(
+    func loadMediaFiles(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Loading media",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let loadedMediaFiles = try await session.client.listMediaFiles(
                 accountID: mediaAccountFilter.nilIfEmpty,
                 chatID: Int(mediaChatIDFilter),
                 messageID: Int(mediaMessageIDFilter),
                 limit: 500
             )
+            try ensureCurrent(session)
+            mediaFiles = loadedMediaFiles
             statusMessage = "Loaded \(mediaFiles.count) media files"
         }
     }
 
-    func showMedia(for message: CoreMessage) async {
+    func showMedia(for message: CoreMessage) {
         mediaAccountFilter = message.accountID
         mediaChatIDFilter = String(message.chatID)
         mediaMessageIDFilter = String(message.messageID)
         selectedSection = .media
-        await loadMediaFiles()
     }
 
     func openMediaFile(_ file: CoreMediaFile) async {
-        await withLoading("Opening media") {
-            let data = try await makeClient().downloadMediaContent(for: file)
+        await withLoading("Opening media") { session in
+            let data = try await session.client.downloadMediaContent(for: file)
+            try ensureCurrent(session)
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TeleMessEndMedia", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let url = directory.appendingPathComponent(file.suggestedFilename)
@@ -521,59 +701,76 @@ final class AppModel {
     }
 
     func fetchMediaContent(_ file: CoreMediaFile) async throws -> Data {
-        try await makeClient().downloadMediaContent(for: file)
+        let session = try makeSession()
+        let data = try await session.client.downloadMediaContent(for: file)
+        try ensureCurrent(session)
+        return data
     }
 
-    func saveSummarySettings(_ settings: SummarySettings) {
-        summarySettingsStore.save(settings)
-        statusMessage = "Summary settings saved"
-        lastError = nil
-    }
-
-    func loadSummarySchedule() async {
-        await withLoading("Loading summary schedule") {
-            let schedule = try await makeClient().fetchDailyPackageSchedule()
-            summarySettingsStore.save(SummarySettings(schedule: schedule, preservingDeliveryFrom: summarySettingsStore.settings))
+    @discardableResult
+    func loadSummarySchedule() async -> Bool {
+        await withLoading("Loading summary schedule") { session in
+            let requestRevision = beginDailySummaryRequest()
+            let fallback = summarySettingsStore.settings
+            let schedule = try await session.client.fetchDailyPackageSchedule()
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            summarySettingsStore.save(SummarySettings(schedule: schedule, preservingDeliveryFrom: fallback))
             statusMessage = schedule.enabled ? "Summary schedule enabled" : "Summary schedule loaded"
         }
     }
 
-    func saveSummarySchedule(_ settings: SummarySettings) async {
-        await withLoading("Saving summary schedule") {
-            let schedule = try await makeClient().updateDailyPackageSchedule(settings.scheduleInput)
+    @discardableResult
+    func saveSummarySchedule(_ settings: SummarySettings) async -> Bool {
+        await withLoading("Saving summary schedule") { session in
+            let requestRevision = beginDailySummaryRequest()
+            let schedule = try await session.client.updateDailyPackageSchedule(settings.scheduleInput)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
             summarySettingsStore.save(SummarySettings(schedule: schedule, preservingDeliveryFrom: settings))
             statusMessage = "Summary schedule saved"
         }
     }
 
     func loadDailySummaries() async {
-        await withLoading("Loading daily summaries") {
+        await withLoading("Loading daily summaries") { session in
+            let requestRevision = beginDailySummaryRequest()
             let settings = summarySettingsStore.settings
-            let client = try makeClient()
-            try await reloadDailySummaryState(using: client, settings: settings)
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            applyDailySummarySnapshot(snapshot)
             statusMessage = "Loaded \(dailySummaryRecords.count) summary records"
         }
     }
 
-    func runDailyPackageAndSummary() async {
-        lastError = nil
-        statusMessage = "Starting daily analysis"
-        do {
-            let client = try makeClient()
-            let job = try await client.runDailySummaryJob(summarySettingsStore.settings.summaryRunInput)
+    @discardableResult
+    func runDailyPackageAndSummary() async -> Bool {
+        await withLoading("Starting daily analysis") { session in
+            let requestRevision = beginDailySummaryRequest()
+            let settings = summarySettingsStore.settings
+            let job = try await session.client.runDailySummaryJob(settings.summaryRunInput)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
             dailySummaryJobs = upsertDailySummaryJob(job, into: dailySummaryJobs)
-            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
-            statusMessage = "Daily analysis \(job.status)"
-        } catch {
-            lastError = error.localizedDescription
-            statusMessage = "Failed"
+            let refreshed = try await refreshDailySummarySnapshotIfAvailable(
+                using: session,
+                settings: settings,
+                requestRevision: requestRevision
+            )
+            if !refreshed || !dailySummaryJobs.contains(where: { $0.jobID == job.jobID }) {
+                dailySummaryJobs = upsertDailySummaryJob(job, into: dailySummaryJobs)
+            }
+            statusMessage = refreshed ? "Daily analysis \(job.status)" : "Daily analysis \(job.status); refresh pending"
         }
     }
 
-    func refreshDailySummaryProgress() async {
-        await withLoading("Refreshing daily analysis") {
-            let client = try makeClient()
-            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+    func refreshDailySummaryProgress(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Refreshing daily analysis",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let requestRevision = beginDailySummaryRequest()
+            let settings = summarySettingsStore.settings
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            applyDailySummarySnapshot(snapshot)
             if let job = latestDailySummaryJob {
                 statusMessage = "Daily analysis \(job.status)"
             } else {
@@ -584,13 +781,14 @@ final class AppModel {
 
     func refreshDailySummaryProgressInBackground() async {
         guard !isLoading else { return }
+        let requestRevision = beginDailySummaryRequest()
 
         do {
-            let client = try makeClient(tokenReadMode: .cacheOnly)
-            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
-            if let job = latestDailySummaryJob {
-                statusMessage = "Daily analysis \(job.status)"
-            }
+            let session = try makeSession(tokenReadMode: .cacheOnly)
+            let settings = summarySettingsStore.settings
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            applyDailySummarySnapshot(snapshot)
         } catch {
             return
         }
@@ -603,58 +801,31 @@ final class AppModel {
             return
         }
 
-        await withLoading("Cancelling daily analysis") {
-            let client = try makeClient()
-            let cancelled = try await client.cancelDailySummaryJob(jobID: target.jobID)
+        await withLoading("Cancelling daily analysis") { session in
+            let requestRevision = beginDailySummaryRequest()
+            let settings = summarySettingsStore.settings
+            let cancelled = try await session.client.cancelDailySummaryJob(jobID: target.jobID)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
             dailySummaryJobs = upsertDailySummaryJob(cancelled, into: dailySummaryJobs)
-            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
-            statusMessage = "Daily analysis \(cancelled.status)"
-        }
-    }
-
-    func runDailyPackage() async {
-        await withLoading("Generating daily package") {
-            let run = try await makeClient().runDailyPackage(summarySettingsStore.settings.packageRunInput)
-            dailyPackageRuns.insert(run, at: 0)
-            statusMessage = "Daily package \(run.status)"
-        }
-    }
-
-    func runDailySummary() async {
-        await withLoading("Running daily summary") {
-            let run = try await makeClient().runDailySummary(summarySettingsStore.settings.summaryRunInput)
-            dailySummaryRuns.insert(run, at: 0)
-            let records = try await makeClient().listDailySummaryRecords(
-                important: summarySettingsStore.settings.importantOnly ? true : nil,
-                tags: summarySettingsStore.settings.tags.nilIfEmpty,
-                includeContent: false,
-                limit: 500
+            let refreshed = try await refreshDailySummarySnapshotIfAvailable(
+                using: session,
+                settings: settings,
+                requestRevision: requestRevision
             )
-            dailySummaryRecords = visibleDailySummaryRecords(records)
-            statusMessage = "Daily summary \(run.status)"
+            if !refreshed || !dailySummaryJobs.contains(where: { $0.jobID == cancelled.jobID }) {
+                dailySummaryJobs = upsertDailySummaryJob(cancelled, into: dailySummaryJobs)
+            }
+            statusMessage = refreshed ? "Daily analysis \(cancelled.status)" : "Daily analysis \(cancelled.status); refresh pending"
         }
-    }
-
-    func hideDailySummaryRecord(_ record: DailySummaryRecord) {
-        hiddenDailySummaryIDs.insert(record.summaryID)
-        saveHiddenDailySummaryIDs()
-        dailySummaryRecords.removeAll { $0.summaryID == record.summaryID }
-        statusMessage = "Summary hidden"
-        lastError = nil
-    }
-
-    func restoreHiddenDailySummaries() async {
-        hiddenDailySummaryIDs.removeAll()
-        saveHiddenDailySummaryIDs()
-        await loadDailySummaries()
     }
 
     func loadDailySummaryRecordContent(_ record: DailySummaryRecord) async {
-        await withLoading("Loading summary content") {
-            let loaded = try await makeClient().fetchDailySummaryRecord(
+        await withLoading("Loading summary content") { session in
+            let loaded = try await session.client.fetchDailySummaryRecord(
                 summaryID: record.summaryID,
                 includeDeleted: includeDeletedDailySummaryRecords || record.deleted == true
             )
+            try ensureCurrent(session)
             if let index = dailySummaryRecords.firstIndex(where: { $0.summaryID == loaded.summaryID }) {
                 dailySummaryRecords[index] = loaded
             } else {
@@ -664,113 +835,169 @@ final class AppModel {
         }
     }
 
-    func deleteDailySummaryRecords(_ records: [DailySummaryRecord]) async {
+    @discardableResult
+    func deleteDailySummaryRecords(_ records: [DailySummaryRecord]) async -> Bool {
         let summaryIDs = records.map(\.summaryID)
-        guard !summaryIDs.isEmpty else { return }
+        guard !summaryIDs.isEmpty else { return false }
 
-        await withLoading("Deleting summary records") {
-            let client = try makeClient()
-            let result = try await client.deleteDailySummaryRecords(summaryIDs: summaryIDs)
-            if includeDeletedDailySummaryRecords {
-                try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
+        return await withLoading("Deleting summary records") { session in
+            let requestRevision = beginDailySummaryRequest()
+            let settings = summarySettingsStore.settings
+            let includeDeleted = includeDeletedDailySummaryRecords
+            let result = try await session.client.deleteDailySummaryRecords(summaryIDs: summaryIDs)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            if includeDeleted {
+                for index in dailySummaryRecords.indices where summaryIDs.contains(dailySummaryRecords[index].summaryID) {
+                    dailySummaryRecords[index].deleted = true
+                }
             } else {
                 dailySummaryRecords.removeAll { summaryIDs.contains($0.summaryID) }
             }
-            statusMessage = "Deleted \(result.changedRows) summary records"
+            let refreshed = try await refreshDailySummarySnapshotIfAvailable(
+                using: session,
+                settings: settings,
+                requestRevision: requestRevision
+            )
+            let message = "Deleted \(result.changedRows) summary records"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func restoreDailySummaryRecords(_ records: [DailySummaryRecord]) async {
+    @discardableResult
+    func restoreDailySummaryRecords(_ records: [DailySummaryRecord]) async -> Bool {
         let summaryIDs = records.map(\.summaryID)
-        guard !summaryIDs.isEmpty else { return }
+        guard !summaryIDs.isEmpty else { return false }
 
-        await withLoading("Restoring summary records") {
-            let client = try makeClient()
-            let result = try await client.restoreDailySummaryRecords(summaryIDs: summaryIDs)
-            try await reloadDailySummaryState(using: client, settings: summarySettingsStore.settings)
-            statusMessage = "Restored \(result.changedRows) summary records"
+        return await withLoading("Restoring summary records") { session in
+            let requestRevision = beginDailySummaryRequest()
+            let settings = summarySettingsStore.settings
+            let result = try await session.client.restoreDailySummaryRecords(summaryIDs: summaryIDs)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            for index in dailySummaryRecords.indices where summaryIDs.contains(dailySummaryRecords[index].summaryID) {
+                dailySummaryRecords[index].deleted = false
+                dailySummaryRecords[index].deletedAt = nil
+            }
+            let refreshed = try await refreshDailySummarySnapshotIfAvailable(
+                using: session,
+                settings: settings,
+                requestRevision: requestRevision
+            )
+            let message = "Restored \(result.changedRows) summary records"
+            statusMessage = refreshed ? message : "\(message); refresh pending"
         }
     }
 
-    func loadDiagnostics() async {
-        await withLoading("Loading diagnostics") {
-            let client = try makeClient()
-            switch diagnosticsSelection {
+    func loadDiagnostics(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Loading diagnostics",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let selection = diagnosticsSelection
+            switch selection {
             case .operationEvents:
-                operationEvents = try await client.listOperationEvents(
+                let loadedEvents = try await session.client.listOperationEvents(
                     accountID: diagnosticsAccountFilter.nilIfEmpty,
                     status: diagnosticsStatusFilter.nilIfEmpty,
                     limit: 100
                 )
+                try ensureCurrent(session)
+                guard diagnosticsSelection == selection else { throw CancellationError() }
+                operationEvents = loadedEvents
             case .participants:
-                participants = try await client.listParticipants(
+                let loadedParticipants = try await session.client.listParticipants(
                     accountID: diagnosticsAccountFilter.nilIfEmpty,
                     originID: Int(diagnosticsOriginIDFilter)
                 )
+                try ensureCurrent(session)
+                guard diagnosticsSelection == selection else { throw CancellationError() }
+                participants = loadedParticipants
             case .cursors:
-                cursors = try await client.listCaptureCursors(accountID: diagnosticsAccountFilter.nilIfEmpty)
+                let loadedCursors = try await session.client.listCaptureCursors(accountID: diagnosticsAccountFilter.nilIfEmpty)
+                try ensureCurrent(session)
+                guard diagnosticsSelection == selection else { throw CancellationError() }
+                cursors = loadedCursors
             case .media:
-                mediaFiles = try await client.listMediaFiles(accountID: diagnosticsAccountFilter.nilIfEmpty, limit: 500)
+                let loadedMediaFiles = try await session.client.listMediaFiles(accountID: diagnosticsAccountFilter.nilIfEmpty, limit: 500)
+                try ensureCurrent(session)
+                guard diagnosticsSelection == selection else { throw CancellationError() }
+                mediaFiles = loadedMediaFiles
             }
             statusMessage = "Diagnostics loaded"
         }
     }
 
-    func deleteOperationEvent(_ event: CoreOperationEvent) async {
-        await withLoading("Deleting operation event") {
-            let client = try makeClient()
-            _ = try await client.deleteOperationEvent(id: event.id)
-            operationEvents = try await client.listOperationEvents(
-                accountID: diagnosticsAccountFilter.nilIfEmpty,
-                status: diagnosticsStatusFilter.nilIfEmpty,
-                limit: 100
-            )
-            statusMessage = "Operation event deleted"
+    @discardableResult
+    func deleteOperationEvent(_ event: CoreOperationEvent) async -> Bool {
+        await withLoading("Deleting operation event") { session in
+            _ = try await session.client.deleteOperationEvent(id: event.id)
+            try ensureCurrent(session)
+            operationEvents.removeAll { $0.id == event.id }
+            let refreshed = try await refreshOperationEventsIfAvailable(using: session)
+            statusMessage = refreshed ? "Operation event deleted" : "Operation event deleted; refresh pending"
         }
     }
 
     func refreshParticipants(accountID: String, originID: Int) async {
-        await withLoading("Refreshing participants") {
-            _ = try await makeClient().refreshParticipants(accountID: accountID, originID: originID, limit: 500)
-            participants = try await makeClient().listParticipants(accountID: accountID, originID: originID)
+        var needsReload = false
+        let selectionWillChange = diagnosticsSelection != .participants
+        let succeeded = await withLoading("Refreshing participants") { session in
+            _ = try await session.client.refreshParticipants(accountID: accountID, originID: originID, limit: 500)
+            try ensureCurrent(session)
+            let refreshed = try await refreshParticipantsIfAvailable(
+                using: session,
+                accountID: accountID,
+                originID: originID
+            )
             diagnosticsSelection = .participants
-            statusMessage = "Participants refreshed"
+            needsReload = !refreshed
+            statusMessage = refreshed ? "Participants refreshed" : "Participants refreshed; list reload pending"
+        }
+        if succeeded, needsReload, !selectionWillChange {
+            await loadDiagnostics()
         }
     }
 
-    func saveProfile(_ profile: CoreProfile, token: String?) {
-        profileStore.upsert(profile)
-        validationStatus = .unverified
+    @discardableResult
+    func saveProfile(_ profile: CoreProfile, token: String?) -> Bool {
         do {
             if let token {
                 if token.isEmpty {
                     try keychain.deleteToken(profileID: profile.id)
-                    tokenCache = CachedProfileToken(profileID: profile.id, token: nil)
                 } else {
                     try keychain.saveToken(token, profileID: profile.id)
-                    tokenCache = CachedProfileToken(profileID: profile.id, token: token)
                 }
+            }
+            profileStore.upsert(profile)
+            beginProfileSession()
+            if let savedToken = token?.nilIfEmpty {
+                tokenCache = CachedProfileToken(profileID: profile.id, token: savedToken)
+            } else if profile.kind == .local, token != nil {
+                tokenCache = CachedProfileToken(profileID: profile.id, token: nil)
             }
             statusMessage = "Profile saved"
             lastError = nil
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    func deleteSelectedProfile() {
-        guard let removed = profileStore.deleteSelected() else { return }
-        validationStatus = .unverified
-        do {
-            try keychain.deleteToken(profileID: removed.id)
-            if tokenCache?.profileID == removed.id {
-                tokenCache = nil
-            }
-            statusMessage = "Profile deleted"
-            lastError = nil
+            return true
         } catch {
             lastError = error.localizedDescription
             statusMessage = "Failed"
+            return false
+        }
+    }
+
+    @discardableResult
+    func deleteSelectedProfile() -> Bool {
+        guard let removed = profileStore.deleteSelected() else { return false }
+        beginProfileSession()
+        summarySettingsStore.removeProfile(removed.id)
+        do {
+            try keychain.deleteToken(profileID: removed.id)
+            statusMessage = "Profile deleted"
+            lastError = nil
+            return true
+        } catch {
+            lastError = "Profile deleted, but its saved token could not be removed: \(error.localizedDescription)"
+            statusMessage = "Profile deleted"
+            return true
         }
     }
 
@@ -788,18 +1015,56 @@ final class AppModel {
         localRunner.stop()
     }
 
-    private var hasCachedTokenForSelectedProfile: Bool {
-        guard let selectedProfile,
-              let tokenCache,
-              tokenCache.profileID == selectedProfile.id,
-              let token = tokenCache.token,
-              !token.isEmpty else {
-            return false
-        }
-        return true
+    private func beginProfileSession() {
+        sessionRevision &+= 1
+        messageRequestRevision &+= 1
+        dailySummaryRequestRevision &+= 1
+        compatibilityCheckedSessionRevision = nil
+        tokenCache = nil
+        activeOperations.removeAll()
+        latestOperationIDs.removeAll()
+        summarySettingsStore.selectProfile(selectedProfile?.id)
+        resetCoreState()
     }
 
-    private func makeClient(tokenReadMode: TokenReadMode = .promptIfNeeded) throws -> CoreAPIClient {
+    private func resetCoreState() {
+        dashboard = DashboardState()
+        accounts = []
+        origins = []
+        summaryScopeAccounts = []
+        summaryScopeOrigins = []
+        messages = []
+        participants = []
+        cursors = []
+        mediaFiles = []
+        operationEvents = []
+        dailySummaryRecords = []
+        dailyPackageRuns = []
+        dailySummaryRuns = []
+        dailySummaryJobs = []
+
+        isLoading = false
+        statusMessage = "Ready"
+        lastError = nil
+        validationStatus = .unverified
+
+        originSearch = ""
+        originAccountFilter = ""
+        originTypeFilter = ""
+        originTagFilter = ""
+        selectedOriginID = nil
+        messageSearchQuery = ""
+        diagnosticsSelection = .operationEvents
+        diagnosticsAccountFilter = ""
+        diagnosticsOriginIDFilter = ""
+        diagnosticsStatusFilter = "failed"
+        mediaAccountFilter = ""
+        mediaChatIDFilter = ""
+        mediaMessageIDFilter = ""
+        includeDeletedDailySummaryRecords = false
+    }
+
+    private func makeSession(tokenReadMode: TokenReadMode = .promptIfNeeded) throws -> CoreSessionContext {
         guard let profile = selectedProfile else {
             throw CoreAPIError.missingProfile
         }
@@ -807,76 +1072,353 @@ final class AppModel {
             throw CoreAPIError.invalidBaseURL(profile.baseURLString)
         }
         let token = try token(for: profile, tokenReadMode: tokenReadMode)
-        return CoreAPIClient(
-            baseURL: baseURL,
-            tokenProvider: FixedTokenProvider(value: token),
-            authMode: profile.authMode
+        return CoreSessionContext(
+            profileID: profile.id,
+            generation: sessionRevision,
+            client: CoreAPIClient(
+                baseURL: baseURL,
+                tokenProvider: FixedTokenProvider(value: token),
+                authMode: profile.authMode,
+                transport: transport
+            )
         )
     }
 
     private func token(for profile: CoreProfile, tokenReadMode: TokenReadMode) throws -> String? {
         if let tokenCache, tokenCache.profileID == profile.id {
-            return tokenCache.token
-        }
-
-        guard tokenReadMode == .promptIfNeeded else {
-            return nil
+            if let token = tokenCache.token?.nilIfEmpty {
+                return token
+            }
+            if profile.kind == .local {
+                return nil
+            }
+            self.tokenCache = nil
         }
 
         AppLog.runtime.info("Reading Keychain token for profile \(profile.id.uuidString, privacy: .public)")
-        let token = try keychain.readToken(profileID: profile.id)
-        tokenCache = CachedProfileToken(profileID: profile.id, token: token)
-        return token
-    }
-
-    private func fetchRecentMessages(tokenReadMode: TokenReadMode = .promptIfNeeded) async throws -> [CoreMessage] {
-        try await makeClient(tokenReadMode: tokenReadMode).fetchRecentMessages(limit: 100, includeMedia: true).items
-    }
-
-    private func reloadDashboard(using client: CoreAPIClient) async throws {
-        async let state = client.fetchSyncState()
-        async let capabilities = client.fetchCapabilities()
-        async let messages = client.fetchRecentMessages(limit: 100, includeMedia: true)
-        async let events = client.listOperationEvents(status: "failed", limit: 100)
-        dashboard.coreState = try await state
-        dashboard.capabilities = try await capabilities
-        dashboard.recentMessages = try await messages.items
-        dashboard.operationEvents = try await events
-        if messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.messages = dashboard.recentMessages
+        do {
+            let token = try keychain.readToken(
+                profileID: profile.id,
+                allowAuthenticationUI: tokenReadMode == .promptIfNeeded
+            )
+            if let token = token?.nilIfEmpty {
+                tokenCache = CachedProfileToken(profileID: profile.id, token: token)
+                return token
+            }
+            if profile.kind == .local {
+                tokenCache = CachedProfileToken(profileID: profile.id, token: nil)
+                return nil
+            }
+            throw CoreAPIError.missingToken
+        } catch let error as KeychainError where tokenReadMode == .cacheOnly && error.isInteractionNotAllowed {
+            throw error
         }
     }
 
-    private func reloadDailySummaryState(using client: CoreAPIClient, settings: SummarySettings) async throws {
+    private func ensureCurrent(_ session: CoreSessionContext) throws {
+        guard session.generation == sessionRevision,
+              session.profileID == selectedProfile?.id else {
+            throw CancellationError()
+        }
+    }
+
+    private func beginMessageRequest() -> UInt64 {
+        messageRequestRevision &+= 1
+        return messageRequestRevision
+    }
+
+    private func ensureCurrent(_ session: CoreSessionContext, messageRevision: UInt64) throws {
+        try ensureCurrent(session)
+        guard messageRevision == messageRequestRevision else {
+            throw CancellationError()
+        }
+    }
+
+    private func beginDailySummaryRequest() -> UInt64 {
+        dailySummaryRequestRevision &+= 1
+        return dailySummaryRequestRevision
+    }
+
+    private func ensureCurrent(_ session: CoreSessionContext, dailySummaryRevision: UInt64) throws {
+        try ensureCurrent(session)
+        guard dailySummaryRevision == dailySummaryRequestRevision else {
+            throw CancellationError()
+        }
+    }
+
+    private func fetchDashboardSnapshot(using client: CoreAPIClient) async throws -> DashboardState {
+        async let state = client.fetchSyncState()
+        async let capabilities = client.fetchCapabilities()
+        async let apiManifest = fetchAPIManifestIfAvailable(using: client)
+        async let messages = client.fetchRecentMessages(limit: 100, includeMedia: true)
+        async let events = client.listOperationEvents(status: "failed", limit: 100)
+        let snapshot = try await (state, capabilities, apiManifest, messages, events)
+        return DashboardState(
+            coreState: snapshot.0,
+            capabilities: snapshot.1,
+            apiManifest: snapshot.2,
+            recentMessages: snapshot.3.items,
+            operationEvents: snapshot.4
+        )
+    }
+
+    private func ensureCompatibility(allowKeychainUI: Bool) async -> Bool {
+        guard compatibilityCheckedSessionRevision != sessionRevision else { return true }
+        let revision = sessionRevision
+        return await withLoading(
+            "Checking core compatibility",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let manifest = try await fetchAPIManifestIfAvailable(using: session.client)
+            let capabilities = try await fetchCapabilitiesIfAvailable(using: session.client)
+            try ensureCurrent(session)
+            dashboard.apiManifest = manifest
+            if let capabilities {
+                dashboard.capabilities = capabilities
+            }
+            compatibilityCheckedSessionRevision = revision
+            if !availableSections.contains(selectedSection) {
+                selectedSection = .dashboard
+            }
+        }
+    }
+
+    private func refreshAccountsIfAvailable(using session: CoreSessionContext) async throws -> Bool {
+        do {
+            let loadedAccounts = try await session.client.listManagementAccounts()
+            try ensureCurrent(session)
+            accounts = loadedAccounts
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try ensureCurrent(session)
+            return false
+        }
+    }
+
+    private func refreshOriginsIfAvailable(using session: CoreSessionContext) async throws -> Bool {
+        do {
+            let loadedOrigins = try await session.client.listOrigins(
+                accountID: originAccountFilter.nilIfEmpty,
+                includeArchived: includeArchivedOrigins
+            )
+            try ensureCurrent(session)
+            origins = loadedOrigins
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try ensureCurrent(session)
+            return false
+        }
+    }
+
+    private func applyArchiveLocally(_ origin: CoreOrigin, archived: Bool) {
+        if archived, !includeArchivedOrigins {
+            origins.removeAll { $0.id == origin.id }
+            return
+        }
+        guard let index = origins.firstIndex(where: { $0.id == origin.id }) else { return }
+        origins[index].archivedAt = archived ? ISO8601DateFormatter().string(from: Date()) : nil
+    }
+
+    private func refreshSummaryScopeIfAvailable(using session: CoreSessionContext) async throws -> Bool {
+        do {
+            async let accountsRequest = session.client.listManagementAccounts()
+            async let originsRequest = session.client.listOrigins(accountID: nil, includeArchived: false)
+            let snapshot = try await (accountsRequest, originsRequest)
+            try ensureCurrent(session)
+            summaryScopeAccounts = snapshot.0
+            summaryScopeOrigins = snapshot.1
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try ensureCurrent(session)
+            return false
+        }
+    }
+
+    private func refreshOperationEventsIfAvailable(using session: CoreSessionContext) async throws -> Bool {
+        do {
+            let loadedEvents = try await session.client.listOperationEvents(
+                accountID: diagnosticsAccountFilter.nilIfEmpty,
+                status: diagnosticsStatusFilter.nilIfEmpty,
+                limit: 100
+            )
+            try ensureCurrent(session)
+            operationEvents = loadedEvents
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try ensureCurrent(session)
+            return false
+        }
+    }
+
+    private func refreshParticipantsIfAvailable(
+        using session: CoreSessionContext,
+        accountID: String,
+        originID: Int
+    ) async throws -> Bool {
+        do {
+            let loadedParticipants = try await session.client.listParticipants(accountID: accountID, originID: originID)
+            try ensureCurrent(session)
+            participants = loadedParticipants
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try ensureCurrent(session)
+            return false
+        }
+    }
+
+    private func upsertAccount(_ account: CoreAccount) {
+        if let index = accounts.firstIndex(where: { $0.id == account.id }) {
+            accounts[index] = account
+        } else {
+            accounts.append(account)
+        }
+    }
+
+    private func fetchAPIManifestIfAvailable(using client: CoreAPIClient) async throws -> CoreAPIManifest? {
+        do {
+            return try await client.fetchAPIManifest()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+    }
+
+    private func fetchCapabilitiesIfAvailable(using client: CoreAPIClient) async throws -> CoreCapabilities? {
+        do {
+            return try await client.fetchCapabilities()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+    }
+
+    private func applyDashboardSnapshot(_ snapshot: DashboardState, messageRevision: UInt64) {
+        var currentSnapshot = snapshot
+        currentSnapshot.apiManifest = snapshot.apiManifest ?? dashboard.apiManifest
+        if messageRevision != messageRequestRevision {
+            currentSnapshot.recentMessages = dashboard.recentMessages
+        }
+        dashboard = currentSnapshot
+        if !availableSections.contains(selectedSection) {
+            selectedSection = .dashboard
+        }
+        if messageRevision == messageRequestRevision,
+           messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            messages = snapshot.recentMessages
+        }
+    }
+
+    private func fetchDailySummarySnapshot(using client: CoreAPIClient, settings: SummarySettings) async throws -> DailySummaryStateSnapshot {
+        let includeDeleted = includeDeletedDailySummaryRecords
         async let summaryRecords = client.listDailySummaryRecords(
             important: settings.importantOnly ? true : nil,
             tags: settings.tags.nilIfEmpty,
-            includeDeleted: includeDeletedDailySummaryRecords,
+            includeDeleted: includeDeleted,
             includeContent: false,
             limit: 500
         )
         async let packageRuns = client.listDailyPackageRuns(limit: 50)
         async let summaryRuns = client.listDailySummaryRuns(limit: 50)
         async let summaryJobs = client.listDailySummaryJobs(limit: 50)
-
-        dailySummaryRecords = visibleDailySummaryRecords(try await summaryRecords)
-        dailyPackageRuns = sortDailyPackageRuns(try await packageRuns)
-        dailySummaryRuns = sortDailySummaryRuns(try await summaryRuns)
-        dailySummaryJobs = sortDailySummaryJobs(try await summaryJobs)
-        dailySummaries = []
+        let snapshot = try await (summaryRecords, packageRuns, summaryRuns, summaryJobs)
+        return DailySummaryStateSnapshot(
+            records: visibleDailySummaryRecords(snapshot.0),
+            packageRuns: sortDailyPackageRuns(snapshot.1),
+            summaryRuns: sortDailySummaryRuns(snapshot.2),
+            jobs: sortDailySummaryJobs(snapshot.3)
+        )
     }
 
-    private func withLoading(_ action: String, operation: () async throws -> Void) async {
-        isLoading = true
+    private func refreshDailySummarySnapshotIfAvailable(
+        using session: CoreSessionContext,
+        settings: SummarySettings,
+        requestRevision: UInt64
+    ) async throws -> Bool {
+        do {
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            applyDailySummarySnapshot(snapshot)
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try ensureCurrent(session, dailySummaryRevision: requestRevision)
+            return false
+        }
+    }
+
+    private func applyDailySummarySnapshot(_ snapshot: DailySummaryStateSnapshot) {
+        dailySummaryRecords = snapshot.records.map { record in
+            guard record.contentMD == nil,
+                  let existing = dailySummaryRecords.first(where: { $0.summaryID == record.summaryID }),
+                  existing.contentMD != nil else {
+                return record
+            }
+            var merged = record
+            merged.contentMD = existing.contentMD
+            merged.contentJSON = existing.contentJSON
+            return merged
+        }
+        dailyPackageRuns = snapshot.packageRuns
+        dailySummaryRuns = snapshot.summaryRuns
+        dailySummaryJobs = snapshot.jobs
+    }
+
+    @discardableResult
+    private func withLoading(
+        _ action: String,
+        tokenReadMode: TokenReadMode = .promptIfNeeded,
+        scope: OperationScope = .exclusive,
+        operation: (CoreSessionContext) async throws -> Void
+    ) async -> Bool {
+        let operationID = UUID()
+        let startingGeneration = sessionRevision
+        if !activeOperations.isEmpty {
+            guard scope == .messages,
+                  activeOperations.values.allSatisfy({ $0 == .messages }) else {
+                return false
+            }
+        }
+        activeOperations[operationID] = scope
+        latestOperationIDs[scope] = operationID
+        isLoading = !activeOperations.isEmpty
         lastError = nil
         statusMessage = action
-        do {
-            try await operation()
-        } catch {
-            lastError = error.localizedDescription
-            statusMessage = "Failed"
+        defer {
+            activeOperations.removeValue(forKey: operationID)
+            if latestOperationIDs[scope] == operationID {
+                latestOperationIDs.removeValue(forKey: scope)
+            }
+            isLoading = !activeOperations.isEmpty
         }
-        isLoading = false
+
+        do {
+            let session = try makeSession(tokenReadMode: tokenReadMode)
+            try await operation(session)
+            try ensureCurrent(session)
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            if startingGeneration == sessionRevision,
+               latestOperationIDs[scope] == operationID {
+                lastError = error.localizedDescription
+                statusMessage = "Failed"
+            }
+            return false
+        }
     }
 
     private func sortDailySummaryRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {
@@ -944,10 +1486,6 @@ final class AppModel {
 
     private func visibleDailySummaryRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {
         sortDailySummaryRecords(records)
-    }
-
-    private func saveHiddenDailySummaryIDs() {
-        UserDefaults.standard.set(Array(hiddenDailySummaryIDs).sorted(), forKey: hiddenDailySummaryIDsKey)
     }
 
     private func sortOrigins(_ origins: [CoreOrigin]) -> [CoreOrigin] {
@@ -1023,15 +1561,6 @@ final class AppModel {
             }
         }
         return targets
-    }
-
-    private func updateOriginImportantLocally(_ origin: CoreOrigin, important: Bool) {
-        origins = origins.map { current in
-            guard current.id == origin.id else { return current }
-            var updated = current
-            updated.important = important
-            return updated
-        }
     }
 
     private func replaceOrigin(_ origin: CoreOrigin) {

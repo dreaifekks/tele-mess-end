@@ -14,7 +14,7 @@ struct TeleMessEndApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("Tele Mess End", id: "main") {
+        Window("Tele Mess End", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 980, minHeight: 640)
         }

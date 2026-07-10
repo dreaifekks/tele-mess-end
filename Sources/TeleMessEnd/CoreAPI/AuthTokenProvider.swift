@@ -15,12 +15,3 @@ struct FixedTokenProvider: AuthTokenProvider {
         value
     }
 }
-
-struct KeychainTokenProvider: AuthTokenProvider {
-    var keychain: KeychainStore
-    var profileID: UUID
-
-    func token() throws -> String? {
-        try keychain.readToken(profileID: profileID)
-    }
-}

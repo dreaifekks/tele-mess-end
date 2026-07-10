@@ -1,5 +1,4 @@
-// The executable Core API contract suite lives in Tests/CoreAPIContractTests and
-// runs through script/test_core_api.sh. Keep this SwiftPM test target free of
-// XCTest imports so `swift test` stays buildable in CommandLineTools-only
-// environments.
+// The executable contract/runtime suites live under Tests/*Tests/main.swift and
+// run through script/verify.sh. Keep this SwiftPM target framework-free because
+// the supported CommandLineTools environment does not ship XCTest or Testing.
 struct CoreAPIClientTestsPlaceholder {}

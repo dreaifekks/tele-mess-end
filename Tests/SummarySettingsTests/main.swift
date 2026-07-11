@@ -4,6 +4,7 @@ import Foundation
 enum SummarySettingsTests {
     static func main() throws {
         try testScheduleInputEncodesScopeAndDelivery()
+        try testLegacyImportantOnlyIsIgnoredAndDropped()
         try testScheduleResponseMapsDelivery()
         try testOmittedDeliveryPreservesFallback()
         try testExplicitNullDeliveryClearsFallback()
@@ -20,7 +21,6 @@ enum SummarySettingsTests {
         settings.originID = "-1001"
         settings.topicID = "42"
         settings.tags = "important"
-        settings.importantOnly = true
         settings.deliveryEnabled = true
         settings.deliveryAccountID = "delivery"
         settings.deliveryOriginID = "-2002"
@@ -34,11 +34,37 @@ enum SummarySettingsTests {
         try expectEqual(scope["account_id"] as? String, "main")
         try expectEqual((scope["origin_id"] as? NSNumber)?.intValue, -1001)
         try expectEqual((scope["topic_id"] as? NSNumber)?.intValue, 42)
-        try expectEqual(scope["important"] as? Bool, true)
+        try expectEqual(scope["tags"] as? String, "important")
+        try expectNil(scope["important"])
         let delivery = try expectDictionary(object["delivery"])
         try expectEqual(delivery["account_id"] as? String, "delivery")
         try expectEqual((delivery["origin_id"] as? NSNumber)?.intValue, -2002)
         try expectEqual((delivery["topic_id"] as? NSNumber)?.intValue, 9)
+    }
+
+    private static func testLegacyImportantOnlyIsIgnoredAndDropped() throws {
+        let settings = try JSONDecoder.core.decode(
+            SummarySettings.self,
+            from: Data(
+                """
+                {
+                  "enabled": true,
+                  "accountID": "main",
+                  "importantOnly": true
+                }
+                """.utf8
+            )
+        )
+
+        let scheduleData = try JSONEncoder.core.encode(settings.scheduleInput)
+        let scheduleObject = try expectDictionary(JSONSerialization.jsonObject(with: scheduleData))
+        let scope = try expectDictionary(scheduleObject["scope"])
+        try expectEqual(scope["account_id"] as? String, "main")
+        try expectNil(scope["important"])
+
+        let persistedData = try JSONEncoder.core.encode(settings)
+        let persistedObject = try expectDictionary(JSONSerialization.jsonObject(with: persistedData))
+        try expectNil(persistedObject["importantOnly"])
     }
 
     private static func testScheduleResponseMapsDelivery() throws {
@@ -51,6 +77,11 @@ enum SummarySettingsTests {
         try expectEqual(settings.deliveryAccountID, "main")
         try expectEqual(settings.deliveryOriginID, "-1001")
         try expectEqual(settings.deliveryTopicID, "42")
+
+        let scheduleData = try JSONEncoder.core.encode(settings.scheduleInput)
+        let scheduleObject = try expectDictionary(JSONSerialization.jsonObject(with: scheduleData))
+        let scope = try expectDictionary(scheduleObject["scope"])
+        try expectNil(scope["important"])
     }
 
     private static func testOmittedDeliveryPreservesFallback() throws {

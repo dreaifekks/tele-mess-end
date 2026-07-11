@@ -3,9 +3,9 @@
 V1 is a native macOS management client for the current Tele Mess Core API.
 
 The core already provides sync, account auth, origin discovery, backup policy,
-participant, cursor, media, operation-event, and web-console endpoints. The app
-should make those workflows usable from a desktop UI while supporting both
-remote and local core profiles.
+participant, cursor, media, operation-event, daily-analysis, persisted
+message-point, and web-console endpoints. The app should make those workflows
+usable from a desktop UI while supporting both remote and local core profiles.
 
 ## Product Goal
 
@@ -17,6 +17,8 @@ Give one operator a reliable Mac app to:
 - discover and select origins/topics to back up
 - edit backup policies and tags
 - inspect recent messages, failed operations, participants, cursors, and media
+- run and inspect Core-owned daily analysis, independent important reports, and
+  validated persisted message points
 
 ## Must Have
 
@@ -113,6 +115,23 @@ Give one operator a reliable Mac app to:
 - Display core timestamps in the Mac user's current time zone.
 - No local message database in V1.
 
+### Daily Analysis And Message Points
+
+- Schedule or manually start the Core-owned daily package and summary workflow.
+- Keep the existing full per-origin analysis active for the selected scope;
+  there is no client-side "important origins only" restriction.
+- Display persisted summary records by `record_type`, including independent
+  important reports and message-point digests.
+- Inspect structured message points from `GET /manage/daily-message-points` and
+  load individual records from `GET /manage/daily-message-points/item`.
+- Display point time, tags, content, Telegram address, importance score and
+  reason, origin context, and source references.
+- Treat only validated, persisted Core points as inputs to the message-point
+  digest. The client does not aggregate or validate points locally.
+- Configure one Telegram target. Core sends the independent important report
+  when present, then sends the message-point digest separately with fixed
+  `#point`; it does not deliver the full per-origin analysis.
+
 ### Diagnostics
 
 - Operation events table with account/status filters.
@@ -143,12 +162,10 @@ Give one operator a reliable Mac app to:
 ## Not V1
 
 - Multi-user or team permissions.
-- AI summaries or extraction workflows.
-- Forwarding to backup Telegram groups.
+- Client-side AI extraction, message-point validation, or summary generation.
+- Client-side Telegram delivery that bypasses the Core workflow.
 - Full local mirror of the archive database.
 - Remote installation or upgrade of `tele-mess-core`.
-- Media preview/download over HTTP unless the core adds a file-serving contract;
-  current `/sync/media-files` exposes core-side paths and metadata.
 - Changing Telegram API ID/hash from the Mac app unless the core API makes that
   explicit.
 
@@ -163,7 +180,9 @@ Give one operator a reliable Mac app to:
 4. Build Accounts and Telegram auth workflow.
 5. Build Origins table, discovery, archive/unarchive, and policy/tag editor.
 6. Add Search, Participants, Cursors, Media, and Operation Events diagnostics.
-7. Add local core runner and log/status handling.
+7. Add daily analysis progress, persisted summary records, message-point
+   inspection, and delivery configuration.
+8. Add local core runner and log/status handling.
 
 ## Acceptance Criteria
 
@@ -176,4 +195,6 @@ Give one operator a reliable Mac app to:
   and edit backup policy fields and tags.
 - Diagnostics pages can inspect participants, cursors, media files, and
   operation events without crashing on empty data.
+- Daily Summary distinguishes full, important, and point-derived artifacts, and
+  Message Points can query and inspect validated persisted point records.
 - The app builds and launches through `./script/build_and_run.sh`.

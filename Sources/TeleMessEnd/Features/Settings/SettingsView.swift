@@ -209,8 +209,11 @@ struct SettingsView: View {
     private var summarySettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                PreferenceGroup(title: "Schedule") {
-                    PreferenceRow(title: "Enable daily group summary") {
+                PreferenceGroup(
+                    title: "Schedule",
+                    help: "Each run keeps the existing full analysis and also produces an independent summary for important origins."
+                ) {
+                    PreferenceRow(title: "Enable daily analysis") {
                         Toggle("", isOn: $summaryDraft.enabled)
                             .labelsHidden()
                     }
@@ -231,7 +234,7 @@ struct SettingsView: View {
 
                 PreferenceGroup(
                     title: "Scope",
-                    help: "Scope filters which archived messages go into the daily package and summary. Empty fields include all matches; Important-only limits it to origins marked with the star."
+                    help: "Scope filters which archived messages enter the daily package. Empty fields include all matching origins, including origins marked important."
                 ) {
                     PreferenceRow(title: "Account ID") {
                         ScopeSingleSelectMenu(
@@ -253,18 +256,13 @@ struct SettingsView: View {
                         TagMultiSelectMenu(tagsText: $summaryDraft.tags, options: targetOptions.scopeTags)
                             .frame(width: 260)
                     }
-                    PreferenceDivider()
-                    PreferenceRow(title: "Important origins only") {
-                        Toggle("", isOn: $summaryDraft.importantOnly)
-                            .labelsHidden()
-                    }
                 }
 
                 PreferenceGroup(
                     title: "Delivery",
-                    help: "Delivery sends the final daily summary through the selected Telegram account to a selected group, channel, or forum topic."
+                    help: "Telegram delivery sends the independent important report when one is present, then sends the message-points digest separately. The digest is generated only from validated, persisted points and always tagged #point. The full per-origin analysis is not delivered."
                 ) {
-                    PreferenceRow(title: "Enable forwarding") {
+                    PreferenceRow(title: "Enable Telegram delivery") {
                         Toggle("", isOn: $summaryDraft.deliveryEnabled)
                             .labelsHidden()
                     }

@@ -12,11 +12,11 @@ prove that it belongs to the selected profile. Without an explicit session
 boundary, data loaded from Core A can remain visible after selecting Core B, and
 late results from A can overwrite B's state.
 
-The Core also owns archive state, origin importance, daily-package jobs, and
-persisted summary records. Mirroring those records in app preferences creates a
-second source of truth. The one exception is a small profile-scoped settings
-fallback for UI continuity when an older schedule response omits its `delivery`
-field.
+The Core also owns archive state, origin importance, daily-package jobs,
+validated and persisted message points, summary artifacts, and Telegram summary
+delivery. Mirroring those records in app preferences creates a second source of
+truth. The one exception is a small profile-scoped settings fallback for UI
+continuity when an older schedule response omits its `delivery` field.
 
 ## Decision
 
@@ -62,9 +62,18 @@ Tokens never enter logs or app preferences.
 
 ### Core remains the source of truth
 
-Archive, importance, jobs, runs, and summary records are read from and mutated
-through the Core API. Legacy local summary aggregation, hidden-summary state,
-and importance overrides are removed.
+Archive, importance, jobs, runs, summary records, and structured message points
+are read from the Core API. Legacy local summary aggregation,
+hidden-summary state, importance overrides, and client-side point validation are
+removed. Summary records may include independent important and point-derived
+artifacts; `record_type` keeps them distinct without creating client-owned
+copies.
+
+The full per-origin analysis continues for the selected scope. Core separately
+builds an important report when appropriate and a message-point digest only from
+validated, persisted points. Telegram delivery sends the important report when
+present, followed by the point digest with fixed `#point`; it does not send the
+full per-origin analysis.
 
 `SummarySettingsStore` stores only profile-scoped UI/schedule preferences. When
 the live schedule includes `delivery: null`, the local delivery draft is

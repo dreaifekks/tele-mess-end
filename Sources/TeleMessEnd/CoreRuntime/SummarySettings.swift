@@ -9,7 +9,6 @@ struct SummarySettings: Codable, Equatable {
     var originID = ""
     var topicID = ""
     var tags = ""
-    var importantOnly = false
     var deliveryEnabled = false
     var deliveryAccountID = ""
     var deliveryOriginID = ""
@@ -23,9 +22,6 @@ struct SummarySettings: Codable, Equatable {
 
     var scope: JSONValue {
         var object: [String: JSONValue] = [:]
-        if importantOnly {
-            object["important"] = .bool(true)
-        }
         if let accountID = accountID.nilIfEmpty {
             object["account_id"] = .string(accountID)
         }
@@ -81,13 +77,34 @@ struct SummarySettings: Codable, Equatable {
         originID = try container.decodeIfPresent(String.self, forKey: .originID) ?? originID
         topicID = try container.decodeIfPresent(String.self, forKey: .topicID) ?? topicID
         tags = try container.decodeIfPresent(String.self, forKey: .tags) ?? tags
-        importantOnly = try container.decodeIfPresent(Bool.self, forKey: .importantOnly) ?? importantOnly
+        // `importantOnly` was a client-side scope restriction. Core now always
+        // runs the full analysis and emits the important-day artifact
+        // independently, so keep accepting the legacy key without applying it.
+        _ = try? container.decodeIfPresent(Bool.self, forKey: .importantOnly)
         deliveryEnabled = try container.decodeIfPresent(Bool.self, forKey: .deliveryEnabled) ?? deliveryEnabled
         deliveryAccountID = try container.decodeIfPresent(String.self, forKey: .deliveryAccountID) ?? deliveryAccountID
         deliveryOriginID = try container.decodeIfPresent(String.self, forKey: .deliveryOriginID) ?? deliveryOriginID
         deliveryTopicID = try container.decodeIfPresent(String.self, forKey: .deliveryTopicID) ?? deliveryTopicID
         systemManager = try container.decodeIfPresent(String.self, forKey: .systemManager) ?? systemManager
         activateSystemd = try container.decodeIfPresent(Bool.self, forKey: .activateSystemd) ?? activateSystemd
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(scheduleHour, forKey: .scheduleHour)
+        try container.encode(scheduleMinute, forKey: .scheduleMinute)
+        try container.encode(timezone, forKey: .timezone)
+        try container.encode(accountID, forKey: .accountID)
+        try container.encode(originID, forKey: .originID)
+        try container.encode(topicID, forKey: .topicID)
+        try container.encode(tags, forKey: .tags)
+        try container.encode(deliveryEnabled, forKey: .deliveryEnabled)
+        try container.encode(deliveryAccountID, forKey: .deliveryAccountID)
+        try container.encode(deliveryOriginID, forKey: .deliveryOriginID)
+        try container.encode(deliveryTopicID, forKey: .deliveryTopicID)
+        try container.encode(systemManager, forKey: .systemManager)
+        try container.encode(activateSystemd, forKey: .activateSystemd)
     }
 
     init(schedule: DailyPackageSchedule, preservingDeliveryFrom fallback: SummarySettings? = nil) {
@@ -100,7 +117,6 @@ struct SummarySettings: Codable, Equatable {
             scheduleMinute = parsed.minute
         }
         if case .object(let object) = schedule.scope {
-            importantOnly = object["important"]?.boolValue ?? false
             accountID = object["account_id"]?.stringValue ?? ""
             originID = object["origin_id"]?.integerStringValue ?? ""
             topicID = object["topic_id"]?.integerStringValue ?? ""
@@ -144,6 +160,7 @@ struct SummarySettings: Codable, Equatable {
         case originID
         case topicID
         case tags
+        // Decode-only compatibility for settings persisted by older clients.
         case importantOnly
         case deliveryEnabled
         case deliveryAccountID
@@ -167,11 +184,6 @@ struct SummarySettings: Codable, Equatable {
 private extension JSONValue {
     var stringValue: String? {
         if case .string(let value) = self { return value }
-        return nil
-    }
-
-    var boolValue: Bool? {
-        if case .bool(let value) = self { return value }
         return nil
     }
 

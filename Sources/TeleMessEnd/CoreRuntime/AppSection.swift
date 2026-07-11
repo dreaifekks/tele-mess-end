@@ -5,6 +5,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case accounts
     case origins
     case messages
+    case messagePoints
     case media
     case summaries
     case diagnostics
@@ -21,6 +22,8 @@ enum AppSection: String, CaseIterable, Identifiable {
             "Origins"
         case .messages:
             "Messages"
+        case .messagePoints:
+            "Message Points"
         case .media:
             "Media"
         case .summaries:
@@ -40,6 +43,8 @@ enum AppSection: String, CaseIterable, Identifiable {
             "rectangle.stack"
         case .messages:
             "bubble.left.and.text.bubble.right"
+        case .messagePoints:
+            "list.bullet.rectangle"
         case .media:
             "photo.on.rectangle"
         case .summaries:
@@ -59,6 +64,8 @@ enum AppSection: String, CaseIterable, Identifiable {
             "/manage/origins"
         case .messages:
             "/sync/messages"
+        case .messagePoints:
+            "/manage/daily-message-points"
         case .media:
             "/sync/media-files"
         case .summaries:

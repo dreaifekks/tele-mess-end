@@ -31,10 +31,29 @@ enum CoreAPILiveSmoke {
                 management.contains(where: { $0.contains("account") || $0.contains("origin") }),
                 "capabilities should include account or origin management"
             )
+            try expectTrue(
+                management.contains("daily_message_points"),
+                "capabilities should include daily message points"
+            )
 
             let manifest = try await client.fetchAPIManifest()
             try expectTrue(!manifest.contractVersion.isEmpty, "manifest should include contract version")
             try expectTrue(!manifest.contractHash.isEmpty, "manifest should include contract hash")
+            let manifestEndpointPaths = manifest.endpoints.compactMap { endpoint -> String? in
+                guard case .object(let fields) = endpoint,
+                      case .string(let path)? = fields["path"] else {
+                    return nil
+                }
+                return path
+            }
+            try expectTrue(
+                manifestEndpointPaths.contains("/manage/daily-message-points"),
+                "manifest should include the daily message point list endpoint"
+            )
+            try expectTrue(
+                manifestEndpointPaths.contains("/manage/daily-message-points/item"),
+                "manifest should include the daily message point item endpoint"
+            )
 
             let accounts = try await client.listManagementAccounts()
             let origins = try await client.listOrigins(includeArchived: true)
@@ -48,6 +67,15 @@ enum CoreAPILiveSmoke {
             let dailySummaryRuns = try await client.listDailySummaryRuns(limit: 5)
             let dailySummaryJobs = try await client.listDailySummaryJobs(limit: 5)
             let dailySummaryRecords = try await client.listDailySummaryRecords(includeContent: false, limit: 5)
+            let dailyMessagePoints = try await client.listDailyMessagePoints(limit: 5)
+            if let firstPoint = dailyMessagePoints.first {
+                let fetchedPoint = try await client.fetchDailyMessagePoint(pointID: firstPoint.pointID)
+                try expectEqual(
+                    fetchedPoint.pointID,
+                    firstPoint.pointID,
+                    "daily message point item should match the listed point"
+                )
+            }
 
             print("Core API live smoke passed")
             print("base_url=\(baseURL.absoluteString)")
@@ -67,6 +95,7 @@ enum CoreAPILiveSmoke {
             print("daily_summary_runs=\(dailySummaryRuns.count)")
             print("daily_summary_jobs=\(dailySummaryJobs.count)")
             print("daily_summary_records=\(dailySummaryRecords.count)")
+            print("daily_message_points=\(dailyMessagePoints.count)")
             exit(0)
         } catch {
             print("Core API live smoke failed: \(error)")

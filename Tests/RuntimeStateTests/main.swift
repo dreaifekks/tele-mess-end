@@ -44,6 +44,9 @@ enum RuntimeStateTests {
         await runner.run("manifest bootstraps before feature loading") {
             try await manifestBootstrapsBeforeFeatureLoad()
         }
+        await runner.run("message points follow manifest, filters, item loading, and session reset") {
+            try await messagePointsFollowManifestAndSession()
+        }
         await runner.run("busy validation waits without false failure") {
             try await busyValidationDoesNotFail()
         }
@@ -356,6 +359,48 @@ enum RuntimeStateTests {
     }
 
     @MainActor
+    private static func messagePointsFollowManifestAndSession() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: MessagePointRuntimeTransport()
+        )
+        model.selectedSection = .messagePoints
+        model.messagePointSearchQuery = "needle"
+        model.messagePointDateFilter = "2026-07-11"
+        model.messagePointTagsFilter = "ops, ai"
+        model.messagePointAccountFilter = "main"
+        model.messagePointOriginIDFilter = "-1001"
+        model.messagePointImportanceMin = 3
+        model.messagePointImportanceMax = 5
+        model.messagePointOriginImportanceFilter = .important
+
+        await model.refreshCurrentSectionWhenIdle(allowKeychainUI: false)
+
+        try expectEqual(model.selectedSection, .messagePoints)
+        try expectEqual(model.availableSections, [.dashboard, .messagePoints])
+        try expectEqual(model.dailyMessagePoints.map(\.pointID), ["point-1"])
+        try expectEqual(model.dailyMessagePoints.first?.content, "List content")
+        try expectNil(model.lastError)
+
+        guard let point = model.dailyMessagePoints.first else {
+            throw RuntimeTestError.failure("Expected a loaded message point")
+        }
+        try expectEqual(await model.loadDailyMessagePoint(point), true)
+        try expectEqual(model.dailyMessagePoints.first?.content, "Detailed content")
+
+        _ = model.addRemoteProfile()
+        try expectEqual(model.dailyMessagePoints.count, 0)
+        try expectEqual(model.messagePointSearchQuery, "")
+        try expectEqual(model.messagePointImportanceMin, 1)
+        try expectEqual(model.messagePointImportanceMax, 5)
+        try expectEqual(model.messagePointOriginImportanceFilter, .any)
+    }
+
+    @MainActor
     private static func busyValidationDoesNotFail() async throws {
         let defaults = makeDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
@@ -536,6 +581,46 @@ private struct CapabilityBootstrapTransport: CoreHTTPTransport {
         }
         return try response(for: request, json: json)
     }
+}
+
+private actor MessagePointRuntimeTransport: CoreHTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let json: String
+        switch request.url?.path {
+        case "/manage/api-manifest":
+            json = #"{"contract_version":"test","contract_hash":"hash","endpoints":[{"path":"/manage/daily-message-points"}]}"#
+        case "/manage/capabilities":
+            json = #"{"mode":"single_user","management":["daily_message_points"]}"#
+        case "/manage/daily-message-points":
+            let values = queryValues(request)
+            try expectEqual(values["q"], ["needle"])
+            try expectEqual(values["date"], ["2026-07-11"])
+            try expectEqual(values["tag"], ["ops", "ai"])
+            try expectEqual(values["account_id"], ["main"])
+            try expectEqual(values["origin_id"], ["-1001"])
+            try expectEqual(values["importance_min"], ["3"])
+            try expectEqual(values["importance_max"], ["5"])
+            try expectEqual(values["origin_important"], ["true"])
+            try expectEqual(values["include_incomplete"], ["false"])
+            try expectEqual(values["limit"], ["1000"])
+            json = #"{"items":[{"point_id":"point-1","run_id":"run-1","package_run_id":"package-1","date":"2026-07-11","timezone":"Asia/Tokyo","source":"telegram","account_id":"main","origin_id":-1001,"topic_id":0,"origin_title":"Ops","message_id":42,"occurred_at":"2026-07-11T09:00:00+09:00","tags":["ops","ai"],"content":"List content","telegram_deeplink":"tg://privatepost?channel=1&post=42","permalink":"https://t.me/c/1/42","importance_score":4,"importance_reason":"Operational change","origin_important":true,"source_refs":["telegram:main:-1001:42"]}]}"#
+        case "/manage/daily-message-points/item":
+            try expectEqual(queryValues(request)["point_id"], ["point-1"])
+            json = #"{"item":{"point_id":"point-1","run_id":"run-1","package_run_id":"package-1","date":"2026-07-11","timezone":"Asia/Tokyo","source":"telegram","account_id":"main","origin_id":-1001,"topic_id":0,"origin_title":"Ops","message_id":42,"occurred_at":"2026-07-11T09:00:00+09:00","tags":["ops","ai"],"content":"Detailed content","telegram_deeplink":"tg://privatepost?channel=1&post=42","permalink":"https://t.me/c/1/42","importance_score":4,"importance_reason":"Operational change","origin_important":true,"source_refs":[{"message_id":42}]}}"#
+        default:
+            throw RuntimeTestError.failure("Unexpected path \(request.url?.path ?? "")")
+        }
+        return try response(for: request, json: json)
+    }
+}
+
+private func queryValues(_ request: URLRequest) -> [String: [String]] {
+    guard let url = request.url,
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+        return [:]
+    }
+    return Dictionary(grouping: components.queryItems ?? [], by: \.name)
+        .mapValues { items in items.compactMap(\.value) }
 }
 
 private func response(for request: URLRequest, json: String) throws -> (Data, HTTPURLResponse) {

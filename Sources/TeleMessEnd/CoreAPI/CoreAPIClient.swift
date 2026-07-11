@@ -370,6 +370,7 @@ struct CoreAPIClient: Sendable {
         dateFrom: String? = nil,
         dateTo: String? = nil,
         provider: String? = nil,
+        recordType: String? = nil,
         important: Bool? = nil,
         tag: String? = nil,
         tags: String? = nil,
@@ -405,6 +406,9 @@ struct CoreAPIClient: Sendable {
         if let provider, !provider.isEmpty {
             query.append(URLQueryItem(name: "provider", value: provider))
         }
+        if let recordType, !recordType.isEmpty {
+            query.append(URLQueryItem(name: "record_type", value: recordType))
+        }
         if let important {
             query.append(URLQueryItem(name: "important", value: important ? "true" : "false"))
         }
@@ -424,7 +428,12 @@ struct CoreAPIClient: Sendable {
         return response.items
     }
 
-    func fetchDailySummaryRecord(summaryID: String? = nil, runID: String? = nil, includeDeleted: Bool = false) async throws -> DailySummaryRecord {
+    func fetchDailySummaryRecord(
+        summaryID: String? = nil,
+        runID: String? = nil,
+        recordType: String? = nil,
+        includeDeleted: Bool = false
+    ) async throws -> DailySummaryRecord {
         var query = [URLQueryItem(name: "include_deleted", value: includeDeleted ? "true" : "false")]
         if let summaryID, !summaryID.isEmpty {
             query.append(URLQueryItem(name: "summary_id", value: summaryID))
@@ -432,7 +441,103 @@ struct CoreAPIClient: Sendable {
         if let runID, !runID.isEmpty {
             query.append(URLQueryItem(name: "run_id", value: runID))
         }
+        if let recordType, !recordType.isEmpty {
+            query.append(URLQueryItem(name: "record_type", value: recordType))
+        }
         let response: CoreWriteResponse<DailySummaryRecord> = try await send("GET", path: "/manage/daily-summary-records/item", query: query)
+        return response.item
+    }
+
+    func listDailyMessagePoints(
+        pointID: String? = nil,
+        runID: String? = nil,
+        packageRunID: String? = nil,
+        date: String? = nil,
+        dateFrom: String? = nil,
+        dateTo: String? = nil,
+        source: String? = nil,
+        accountID: String? = nil,
+        originID: Int? = nil,
+        topicID: Int? = nil,
+        messageID: Int? = nil,
+        tags: [String] = [],
+        tagsCSV: String? = nil,
+        importanceMin: Int? = nil,
+        importanceMax: Int? = nil,
+        originImportant: Bool? = nil,
+        query searchText: String? = nil,
+        includeIncomplete: Bool = false,
+        limit: Int = 100
+    ) async throws -> [DailyMessagePoint] {
+        var query = [
+            URLQueryItem(name: "include_incomplete", value: includeIncomplete ? "true" : "false"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if let pointID, !pointID.isEmpty {
+            query.append(URLQueryItem(name: "point_id", value: pointID))
+        }
+        if let runID, !runID.isEmpty {
+            query.append(URLQueryItem(name: "run_id", value: runID))
+        }
+        if let packageRunID, !packageRunID.isEmpty {
+            query.append(URLQueryItem(name: "package_run_id", value: packageRunID))
+        }
+        if let date, !date.isEmpty {
+            query.append(URLQueryItem(name: "date", value: date))
+        }
+        if let dateFrom, !dateFrom.isEmpty {
+            query.append(URLQueryItem(name: "date_from", value: dateFrom))
+        }
+        if let dateTo, !dateTo.isEmpty {
+            query.append(URLQueryItem(name: "date_to", value: dateTo))
+        }
+        if let source, !source.isEmpty {
+            query.append(URLQueryItem(name: "source", value: source))
+        }
+        if let accountID, !accountID.isEmpty {
+            query.append(URLQueryItem(name: "account_id", value: accountID))
+        }
+        if let originID {
+            query.append(URLQueryItem(name: "origin_id", value: String(originID)))
+        }
+        if let topicID {
+            query.append(URLQueryItem(name: "topic_id", value: String(topicID)))
+        }
+        if let messageID {
+            query.append(URLQueryItem(name: "message_id", value: String(messageID)))
+        }
+        for tag in tags where !tag.isEmpty {
+            query.append(URLQueryItem(name: "tag", value: tag))
+        }
+        if let tagsCSV, !tagsCSV.isEmpty {
+            query.append(URLQueryItem(name: "tags", value: tagsCSV))
+        }
+        if let importanceMin {
+            query.append(URLQueryItem(name: "importance_min", value: String(importanceMin)))
+        }
+        if let importanceMax {
+            query.append(URLQueryItem(name: "importance_max", value: String(importanceMax)))
+        }
+        if let originImportant {
+            query.append(URLQueryItem(name: "origin_important", value: originImportant ? "true" : "false"))
+        }
+        if let searchText, !searchText.isEmpty {
+            query.append(URLQueryItem(name: "q", value: searchText))
+        }
+        let response: CoreItemsResponse<DailyMessagePoint> = try await send(
+            "GET",
+            path: "/manage/daily-message-points",
+            query: query
+        )
+        return response.items
+    }
+
+    func fetchDailyMessagePoint(pointID: String) async throws -> DailyMessagePoint {
+        let response: CoreWriteResponse<DailyMessagePoint> = try await send(
+            "GET",
+            path: "/manage/daily-message-points/item",
+            query: [URLQueryItem(name: "point_id", value: pointID)]
+        )
         return response.item
     }
 

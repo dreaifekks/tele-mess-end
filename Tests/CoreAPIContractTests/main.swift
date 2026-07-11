@@ -13,6 +13,7 @@ enum CoreAPIContractTests {
         await runner.run("origins and policies") { try await testOriginsAndPolicies() }
         await runner.run("diagnostics endpoints") { try await testDiagnosticsEndpoints() }
         await runner.run("daily package and summary endpoints") { try await testDailyPackageAndSummaryEndpoints() }
+        await runner.run("daily message point endpoints") { try await testDailyMessagePointEndpoints() }
         await runner.run("media content download") { try await testMediaContentDownload() }
         await runner.run("http errors map detail") { try await testHTTPErrorMapping() }
         runner.finish()
@@ -713,14 +714,22 @@ enum CoreAPIContractTests {
 
         let recordsClient = makeClient(
             expectedPath: "/manage/daily-summary-records",
-            expectedQueryItems: ["important=true", "include_deleted=false", "include_content=false", "limit=10"],
+            expectedQueryItems: ["record_type=important_daily", "important=true", "include_deleted=false", "include_content=false", "limit=10"],
             responseJSON:
             """
-            {"items": [{"summary_id": "rec-1", "run_id": "sum-1", "content_preview": "Daily summary", "tags": ["prod", "ops"], "tags_csv": "prod,ops", "important": true, "origin_count": 5, "group_count": 2, "image_count": 1, "deleted": false}]}
+            {"items": [{"summary_id": "rec-1", "run_id": "sum-1", "record_type": "important_daily", "content_preview": "Daily summary", "tags": ["prod", "ops"], "tags_csv": "prod,ops", "important": true, "origin_count": 5, "group_count": 2, "image_count": 1, "deleted": false}]}
             """
         )
-        let records = try await recordsClient.listDailySummaryRecords(important: true, includeContent: false, limit: 10)
+        let records = try await recordsClient.listDailySummaryRecords(
+            recordType: "important_daily",
+            important: true,
+            includeContent: false,
+            limit: 10
+        )
         try expectEqual(records.first?.summaryID, "rec-1")
+        try expectEqual(records.first?.recordType, "important_daily")
+        try expectEqual(records.first?.recordTypeSortValue, "important_daily")
+        try expectEqual(records.first?.recordTypeDisplayName, "Important Daily")
         try expectEqual(records.first?.tags ?? [], ["prod", "ops"])
         try expectEqual(records.first?.tagsCSV, "prod,ops")
         try expectEqual(records.first?.originCount, 5)
@@ -729,13 +738,15 @@ enum CoreAPIContractTests {
 
         let recordClient = makeClient(
             expectedPath: "/manage/daily-summary-records/item",
-            expectedQueryItems: ["summary_id=rec-1", "include_deleted=false"],
+            expectedQueryItems: ["run_id=sum-1", "record_type=important_daily", "include_deleted=false"],
             responseJSON:
             """
-            {"item": {"summary_id": "rec-1", "run_id": "sum-1", "content_preview": "Daily summary", "content_md": "# Daily", "deleted": false}}
+            {"item": {"summary_id": "rec-1", "run_id": "sum-1", "record_type": "important_daily", "content_preview": "Daily summary", "content_md": "# Daily", "deleted": false}}
             """
         )
-        try expectEqual(try await recordClient.fetchDailySummaryRecord(summaryID: "rec-1").contentMD, "# Daily")
+        let fetchedRecord = try await recordClient.fetchDailySummaryRecord(runID: "sum-1", recordType: "important_daily")
+        try expectEqual(fetchedRecord.contentMD, "# Daily")
+        try expectEqual(fetchedRecord.recordType, "important_daily")
 
         let contentTransport = MockTransport { request in
             try expectEqual(request.url?.path, "/manage/daily-summary-runs/content")
@@ -775,6 +786,185 @@ enum CoreAPIContractTests {
             }
         )
         try expectEqual(try await restoreRecordsClient.restoreDailySummaryRecords(summaryIDs: ["rec-1"]).deleted, false)
+    }
+
+    static func testDailyMessagePointEndpoints() async throws {
+        let defaultListClient = makeClient(
+            expectedPath: "/manage/daily-message-points",
+            expectedQueryItems: ["include_incomplete=false", "limit=100"],
+            responseJSON: #"{"items": []}"#
+        )
+        try expectEqual(try await defaultListClient.listDailyMessagePoints().count, 0)
+
+        let listClient = makeClient(
+            expectedPath: "/manage/daily-message-points",
+            expectedQueryItems: [
+                "point_id=point-1",
+                "run_id=sum-1",
+                "package_run_id=pkg-1",
+                "date=2026-07-10",
+                "date_from=2026-07-01",
+                "date_to=2026-07-10",
+                "source=telegram",
+                "account_id=main",
+                "origin_id=-2001",
+                "topic_id=8",
+                "message_id=77",
+                "importance_min=3",
+                "importance_max=5",
+                "origin_important=true",
+                "q=release",
+                "include_incomplete=true",
+                "limit=25"
+            ],
+            responseJSON:
+            """
+            {
+              "items": [
+                {
+                  "point_id": "point-1",
+                  "run_id": "sum-1",
+                  "package_run_id": "pkg-1",
+                  "date": "2026-07-10",
+                  "timezone": "Asia/Tokyo",
+                  "source": "telegram",
+                  "account_id": "main",
+                  "origin_id": -2001,
+                  "topic_id": 8,
+                  "origin_title": "Release",
+                  "message_id": 77,
+                  "occurred_at": "2026-07-10T09:30:00+09:00",
+                  "tags": ["AI", "point"],
+                  "tags_csv": "AI,point",
+                  "content": "A release is ready.",
+                  "telegram_deeplink": "tg://privatepost?channel=2001&post=77",
+                  "permalink": "https://t.me/c/2001/77",
+                  "importance_score": 4,
+                  "importance_reason": "Actionable release",
+                  "origin_important": true,
+                  "source_refs": [
+                    "main/-2001/8/77",
+                    {"source": "telegram", "message_id": 77}
+                  ],
+                  "provider": "codex-cli",
+                  "run_status": "completed",
+                  "job_status": "completed",
+                  "created_at": "2026-07-10T00:31:00+00:00",
+                  "updated_at": "2026-07-10T00:31:00+00:00"
+                }
+              ]
+            }
+            """,
+            verify: { request in
+                let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let tagValues = queryItems.filter { $0.name == "tag" }.compactMap(\.value)
+                try expectEqual(tagValues, ["AI", "point"])
+                try expectEqual(queryItems.first(where: { $0.name == "tags" })?.value, "AI,point")
+            }
+        )
+        let points = try await listClient.listDailyMessagePoints(
+            pointID: "point-1",
+            runID: "sum-1",
+            packageRunID: "pkg-1",
+            date: "2026-07-10",
+            dateFrom: "2026-07-01",
+            dateTo: "2026-07-10",
+            source: "telegram",
+            accountID: "main",
+            originID: -2001,
+            topicID: 8,
+            messageID: 77,
+            tags: ["AI", "point"],
+            tagsCSV: "AI,point",
+            importanceMin: 3,
+            importanceMax: 5,
+            originImportant: true,
+            query: "release",
+            includeIncomplete: true,
+            limit: 25
+        )
+        try expectEqual(points.count, 1)
+        let point = try require(points.first, "Expected one daily message point")
+        try expectEqual(point.id, "point-1")
+        try expectEqual(point.runID, "sum-1")
+        try expectEqual(point.packageRunID, "pkg-1")
+        try expectEqual(point.date, "2026-07-10")
+        try expectEqual(point.timezone, "Asia/Tokyo")
+        try expectEqual(point.source, "telegram")
+        try expectEqual(point.accountID, "main")
+        try expectEqual(point.originID, -2001)
+        try expectEqual(point.topicID, 8)
+        try expectEqual(point.originTitle, "Release")
+        try expectEqual(point.messageID, 77)
+        try expectEqual(point.occurredAt, "2026-07-10T09:30:00+09:00")
+        try expectEqual(point.tags, ["AI", "point"])
+        try expectEqual(point.tagsCSV, "AI,point")
+        try expectEqual(point.content, "A release is ready.")
+        try expectEqual(point.telegramDeeplink, "tg://privatepost?channel=2001&post=77")
+        try expectEqual(point.permalink, "https://t.me/c/2001/77")
+        try expectEqual(point.importanceScore, 4)
+        try expectEqual(point.importanceReason, "Actionable release")
+        try expectEqual(point.originImportant, true)
+        try expectEqual(
+            point.sourceRefs,
+            [
+                .string("main/-2001/8/77"),
+                .object(["source": .string("telegram"), "message_id": .number(77)])
+            ]
+        )
+        try expectEqual(point.provider, "codex-cli")
+        try expectEqual(point.runStatus, "completed")
+        try expectEqual(point.jobStatus, "completed")
+        try expectEqual(point.createdAt, "2026-07-10T00:31:00+00:00")
+        try expectEqual(point.updatedAt, "2026-07-10T00:31:00+00:00")
+
+        let itemClient = makeClient(
+            expectedPath: "/manage/daily-message-points/item",
+            expectedQueryItems: ["point_id=point-2"],
+            responseJSON:
+            """
+            {
+              "item": {
+                "point_id": "point-2",
+                "run_id": "sum-2",
+                "package_run_id": "pkg-2",
+                "date": "2026-07-11",
+                "timezone": "UTC",
+                "source": "telegram",
+                "account_id": "secondary",
+                "origin_id": -3001,
+                "topic_id": 0,
+                "origin_title": null,
+                "message_id": null,
+                "occurred_at": "2026-07-11T00:00:00+00:00",
+                "tags": [],
+                "tags_csv": null,
+                "content": "A standalone point.",
+                "telegram_deeplink": null,
+                "permalink": null,
+                "importance_score": 1,
+                "importance_reason": null,
+                "origin_important": false,
+                "source_refs": [{"kind": "archive", "id": "ref-2"}],
+                "provider": null,
+                "run_status": null,
+                "job_status": null
+              }
+            }
+            """
+        )
+        let item = try await itemClient.fetchDailyMessagePoint(pointID: "point-2")
+        try expectEqual(item.pointID, "point-2")
+        try expectEqual(item.originTitle, nil)
+        try expectEqual(item.messageID, nil)
+        try expectEqual(item.tags, [])
+        try expectEqual(item.tagsCSV, nil)
+        try expectEqual(item.telegramDeeplink, nil)
+        try expectEqual(item.importanceReason, nil)
+        try expectEqual(item.originImportant, false)
+        try expectEqual(item.sourceRefs, [.object(["kind": .string("archive"), "id": .string("ref-2")])])
+        try expectEqual(item.createdAt, nil)
+        try expectEqual(item.updatedAt, nil)
     }
 
     static func testMediaContentDownload() async throws {
@@ -902,6 +1092,13 @@ private func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: St
     guard actual == expected else {
         throw ContractError.failure(message ?? "Expected \(String(describing: expected)), got \(String(describing: actual))")
     }
+}
+
+private func require<T>(_ value: T?, _ message: String) throws -> T {
+    guard let value else {
+        throw ContractError.failure(message)
+    }
+    return value
 }
 
 private func expectNil<T>(_ value: T?, _ message: String? = nil) throws {

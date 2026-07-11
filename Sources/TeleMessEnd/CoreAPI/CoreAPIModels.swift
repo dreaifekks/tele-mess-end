@@ -994,6 +994,66 @@ struct DailySummaryRunInput: Encodable {
     var background: Bool
 }
 
+struct DailyMessagePoint: Decodable, Identifiable, Hashable {
+    var pointID: String
+    var runID: String
+    var packageRunID: String
+    var date: String
+    var timezone: String
+    var source: String
+    var accountID: String
+    var originID: Int
+    var topicID: Int
+    var originTitle: String?
+    var messageID: Int?
+    var occurredAt: String
+    var tags: [String]
+    var tagsCSV: String?
+    var content: String
+    var telegramDeeplink: String?
+    var permalink: String?
+    var importanceScore: Int
+    var importanceReason: String?
+    var originImportant: Bool
+    var sourceRefs: [JSONValue]
+    var provider: String?
+    var runStatus: String?
+    var jobStatus: String?
+    var createdAt: String?
+    var updatedAt: String?
+
+    var id: String { pointID }
+
+    private enum CodingKeys: String, CodingKey {
+        case pointID = "point_id"
+        case runID = "run_id"
+        case packageRunID = "package_run_id"
+        case date
+        case timezone
+        case source
+        case accountID = "account_id"
+        case originID = "origin_id"
+        case topicID = "topic_id"
+        case originTitle = "origin_title"
+        case messageID = "message_id"
+        case occurredAt = "occurred_at"
+        case tags
+        case tagsCSV = "tags_csv"
+        case content
+        case telegramDeeplink = "telegram_deeplink"
+        case permalink
+        case importanceScore = "importance_score"
+        case importanceReason = "importance_reason"
+        case originImportant = "origin_important"
+        case sourceRefs = "source_refs"
+        case provider
+        case runStatus = "run_status"
+        case jobStatus = "job_status"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
 struct DailySummaryRecord: Decodable, Identifiable, Hashable {
     var summaryID: String
     var runID: String
@@ -1004,6 +1064,7 @@ struct DailySummaryRecord: Decodable, Identifiable, Hashable {
     var tags: [String]?
     var tagsCSV: String?
     var important: Bool?
+    var recordType: String
     var provider: String?
     var title: String?
     var contentPreview: String
@@ -1031,6 +1092,7 @@ struct DailySummaryRecord: Decodable, Identifiable, Hashable {
         case tags
         case tagsCSV = "tags_csv"
         case important
+        case recordType = "record_type"
         case provider
         case title
         case contentPreview = "content_preview"
@@ -1049,6 +1111,30 @@ struct DailySummaryRecord: Decodable, Identifiable, Hashable {
 }
 
 extension DailySummaryRecord {
+    var recordTypeSortValue: String {
+        recordType
+    }
+
+    var recordTypeDisplayName: String {
+        switch recordType {
+        case "important_daily":
+            "Important Daily"
+        case "point_daily":
+            "Message Points"
+        case "important_origin":
+            "Important Origin"
+        case "tag_group":
+            "Tag Group"
+        case "final":
+            "Final"
+        default:
+            recordType
+                .split(separator: "_")
+                .map { $0.capitalized }
+                .joined(separator: " ")
+        }
+    }
+
     var titleSortValue: String {
         title ?? summaryID
     }

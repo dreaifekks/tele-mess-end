@@ -105,6 +105,36 @@ enum DiagnosticsSection: String, CaseIterable, Identifiable {
     }
 }
 
+enum MessagePointOriginImportanceFilter: String, CaseIterable, Identifiable {
+    case any
+    case important
+    case regular
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .any:
+            "Any origin"
+        case .important:
+            "Important origins"
+        case .regular:
+            "Regular origins"
+        }
+    }
+
+    var queryValue: Bool? {
+        switch self {
+        case .any:
+            nil
+        case .important:
+            true
+        case .regular:
+            false
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -131,6 +161,7 @@ final class AppModel {
     var summaryScopeAccounts: [CoreAccount] = []
     var summaryScopeOrigins: [CoreOrigin] = []
     var messages: [CoreMessage] = []
+    var dailyMessagePoints: [DailyMessagePoint] = []
     var participants: [CoreParticipant] = []
     var cursors: [CoreCaptureCursor] = []
     var mediaFiles: [CoreMediaFile] = []
@@ -155,6 +186,14 @@ final class AppModel {
     var selectedOriginID: CoreOrigin.ID?
 
     var messageSearchQuery = ""
+    var messagePointSearchQuery = ""
+    var messagePointDateFilter = ""
+    var messagePointTagsFilter = ""
+    var messagePointAccountFilter = ""
+    var messagePointOriginIDFilter = ""
+    var messagePointImportanceMin = 1
+    var messagePointImportanceMax = 5
+    var messagePointOriginImportanceFilter: MessagePointOriginImportanceFilter = .any
     var diagnosticsSelection: DiagnosticsSection = .operationEvents
     var diagnosticsAccountFilter = ""
     var diagnosticsOriginIDFilter = ""
@@ -299,6 +338,8 @@ final class AppModel {
             await loadOrigins(allowKeychainUI: allowKeychainUI)
         case .messages:
             await loadRecentMessages(allowKeychainUI: allowKeychainUI)
+        case .messagePoints:
+            await loadDailyMessagePoints(allowKeychainUI: allowKeychainUI)
         case .media:
             await loadMediaFiles(allowKeychainUI: allowKeychainUI)
         case .summaries:
@@ -663,6 +704,63 @@ final class AppModel {
         }
     }
 
+    func loadDailyMessagePoints(allowKeychainUI: Bool = true) async {
+        await withLoading(
+            "Loading message points",
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+        ) { session in
+            let minimumImportance = min(messagePointImportanceMin, messagePointImportanceMax)
+            let maximumImportance = max(messagePointImportanceMin, messagePointImportanceMax)
+            let tags = messagePointTagsFilter
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let loadedPoints = try await session.client.listDailyMessagePoints(
+                date: messagePointDateFilter.nilIfEmpty,
+                accountID: messagePointAccountFilter.nilIfEmpty,
+                originID: Int(messagePointOriginIDFilter),
+                tags: tags,
+                importanceMin: minimumImportance,
+                importanceMax: maximumImportance,
+                originImportant: messagePointOriginImportanceFilter.queryValue,
+                query: messagePointSearchQuery.nilIfEmpty,
+                includeIncomplete: false,
+                limit: 1_000
+            )
+            try ensureCurrent(session)
+            dailyMessagePoints = sortDailyMessagePoints(loadedPoints)
+            statusMessage = dailyMessagePoints.count == 1_000
+                ? "Loaded 1,000 completed message points (limit reached)"
+                : "Loaded \(dailyMessagePoints.count) completed message points"
+        }
+    }
+
+    @discardableResult
+    func loadDailyMessagePoint(_ point: DailyMessagePoint) async -> Bool {
+        await withLoading("Loading message point") { session in
+            let loaded = try await session.client.fetchDailyMessagePoint(pointID: point.pointID)
+            try ensureCurrent(session)
+            if let index = dailyMessagePoints.firstIndex(where: { $0.pointID == loaded.pointID }) {
+                dailyMessagePoints[index] = loaded
+            } else {
+                dailyMessagePoints.append(loaded)
+                dailyMessagePoints = sortDailyMessagePoints(dailyMessagePoints)
+            }
+            statusMessage = "Loaded message point"
+        }
+    }
+
+    func clearDailyMessagePointFilters() {
+        messagePointSearchQuery = ""
+        messagePointDateFilter = ""
+        messagePointTagsFilter = ""
+        messagePointAccountFilter = ""
+        messagePointOriginIDFilter = ""
+        messagePointImportanceMin = 1
+        messagePointImportanceMax = 5
+        messagePointOriginImportanceFilter = .any
+    }
+
     func loadMediaFiles(allowKeychainUI: Bool = true) async {
         await withLoading(
             "Loading media",
@@ -733,8 +831,7 @@ final class AppModel {
     func loadDailySummaries() async {
         await withLoading("Loading daily summaries") { session in
             let requestRevision = beginDailySummaryRequest()
-            let settings = summarySettingsStore.settings
-            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             applyDailySummarySnapshot(snapshot)
             statusMessage = "Loaded \(dailySummaryRecords.count) summary records"
@@ -751,7 +848,6 @@ final class AppModel {
             dailySummaryJobs = upsertDailySummaryJob(job, into: dailySummaryJobs)
             let refreshed = try await refreshDailySummarySnapshotIfAvailable(
                 using: session,
-                settings: settings,
                 requestRevision: requestRevision
             )
             if !refreshed || !dailySummaryJobs.contains(where: { $0.jobID == job.jobID }) {
@@ -767,8 +863,7 @@ final class AppModel {
             tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
         ) { session in
             let requestRevision = beginDailySummaryRequest()
-            let settings = summarySettingsStore.settings
-            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             applyDailySummarySnapshot(snapshot)
             if let job = latestDailySummaryJob {
@@ -785,8 +880,7 @@ final class AppModel {
 
         do {
             let session = try makeSession(tokenReadMode: .cacheOnly)
-            let settings = summarySettingsStore.settings
-            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             applyDailySummarySnapshot(snapshot)
         } catch {
@@ -803,13 +897,11 @@ final class AppModel {
 
         await withLoading("Cancelling daily analysis") { session in
             let requestRevision = beginDailySummaryRequest()
-            let settings = summarySettingsStore.settings
             let cancelled = try await session.client.cancelDailySummaryJob(jobID: target.jobID)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             dailySummaryJobs = upsertDailySummaryJob(cancelled, into: dailySummaryJobs)
             let refreshed = try await refreshDailySummarySnapshotIfAvailable(
                 using: session,
-                settings: settings,
                 requestRevision: requestRevision
             )
             if !refreshed || !dailySummaryJobs.contains(where: { $0.jobID == cancelled.jobID }) {
@@ -823,6 +915,7 @@ final class AppModel {
         await withLoading("Loading summary content") { session in
             let loaded = try await session.client.fetchDailySummaryRecord(
                 summaryID: record.summaryID,
+                recordType: record.recordType,
                 includeDeleted: includeDeletedDailySummaryRecords || record.deleted == true
             )
             try ensureCurrent(session)
@@ -842,7 +935,6 @@ final class AppModel {
 
         return await withLoading("Deleting summary records") { session in
             let requestRevision = beginDailySummaryRequest()
-            let settings = summarySettingsStore.settings
             let includeDeleted = includeDeletedDailySummaryRecords
             let result = try await session.client.deleteDailySummaryRecords(summaryIDs: summaryIDs)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
@@ -855,7 +947,6 @@ final class AppModel {
             }
             let refreshed = try await refreshDailySummarySnapshotIfAvailable(
                 using: session,
-                settings: settings,
                 requestRevision: requestRevision
             )
             let message = "Deleted \(result.changedRows) summary records"
@@ -870,7 +961,6 @@ final class AppModel {
 
         return await withLoading("Restoring summary records") { session in
             let requestRevision = beginDailySummaryRequest()
-            let settings = summarySettingsStore.settings
             let result = try await session.client.restoreDailySummaryRecords(summaryIDs: summaryIDs)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             for index in dailySummaryRecords.indices where summaryIDs.contains(dailySummaryRecords[index].summaryID) {
@@ -879,7 +969,6 @@ final class AppModel {
             }
             let refreshed = try await refreshDailySummarySnapshotIfAvailable(
                 using: session,
-                settings: settings,
                 requestRevision: requestRevision
             )
             let message = "Restored \(result.changedRows) summary records"
@@ -1034,6 +1123,7 @@ final class AppModel {
         summaryScopeAccounts = []
         summaryScopeOrigins = []
         messages = []
+        dailyMessagePoints = []
         participants = []
         cursors = []
         mediaFiles = []
@@ -1054,6 +1144,7 @@ final class AppModel {
         originTagFilter = ""
         selectedOriginID = nil
         messageSearchQuery = ""
+        clearDailyMessagePointFilters()
         diagnosticsSelection = .operationEvents
         diagnosticsAccountFilter = ""
         diagnosticsOriginIDFilter = ""
@@ -1320,11 +1411,9 @@ final class AppModel {
         }
     }
 
-    private func fetchDailySummarySnapshot(using client: CoreAPIClient, settings: SummarySettings) async throws -> DailySummaryStateSnapshot {
+    private func fetchDailySummarySnapshot(using client: CoreAPIClient) async throws -> DailySummaryStateSnapshot {
         let includeDeleted = includeDeletedDailySummaryRecords
         async let summaryRecords = client.listDailySummaryRecords(
-            important: settings.importantOnly ? true : nil,
-            tags: settings.tags.nilIfEmpty,
             includeDeleted: includeDeleted,
             includeContent: false,
             limit: 500
@@ -1343,11 +1432,10 @@ final class AppModel {
 
     private func refreshDailySummarySnapshotIfAvailable(
         using session: CoreSessionContext,
-        settings: SummarySettings,
         requestRevision: UInt64
     ) async throws -> Bool {
         do {
-            let snapshot = try await fetchDailySummarySnapshot(using: session.client, settings: settings)
+            let snapshot = try await fetchDailySummarySnapshot(using: session.client)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             applyDailySummarySnapshot(snapshot)
             return true
@@ -1435,6 +1523,15 @@ final class AppModel {
                 return lhs.titleSortValue.localizedCaseInsensitiveCompare(rhs.titleSortValue) == .orderedAscending
             }
             return lhs.summaryID.localizedCaseInsensitiveCompare(rhs.summaryID) == .orderedAscending
+        }
+    }
+
+    private func sortDailyMessagePoints(_ points: [DailyMessagePoint]) -> [DailyMessagePoint] {
+        points.sorted { lhs, rhs in
+            if lhs.occurredAt != rhs.occurredAt {
+                return lhs.occurredAt > rhs.occurredAt
+            }
+            return lhs.pointID.localizedCaseInsensitiveCompare(rhs.pointID) == .orderedAscending
         }
     }
 

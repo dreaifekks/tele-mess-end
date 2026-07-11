@@ -3,24 +3,23 @@
 This file maps the current `dreaifekks/tele-mess-core` `master` API surface to
 the macOS V1 client.
 
-Reference checked: `tele-mess-core` default branch `master` at `c4692c1`,
-pushed `2026-07-03T10:12:28Z`.
+Reference checked: live `tele-mess-core` OpenAPI contract `2026-07-10.4`
+(`bf0d29cf60733f79`) on 2026-07-11.
 
 ## Runtime Model
 
 The core is a single-user, multi-Telegram-account archive and management
 service. It owns Telegram ingestion, SQLite archive state, backup policies,
-media capture, participant metadata, and runtime operation events.
+media capture, participant metadata, runtime operation events, daily analysis,
+validated message points, persisted summary artifacts, and summary delivery.
 
 The Mac app is a native control and inspection client. It should not duplicate
 the archive database in V1. The core remains the source of truth.
 
-The core intentionally does not:
-
-- forward messages to backup Telegram groups
-- generate summaries
-- run AI workflows
-- model multiple product users or tenants
+The core also runs the daily package and AI-summary workflow. The client starts,
+monitors, and inspects that workflow but does not reproduce extraction,
+validation, persistence, or Telegram delivery locally. The service still does
+not model multiple product users or tenants.
 
 ## Auth
 
@@ -421,6 +420,76 @@ Mac V1:
 - Dashboard failed/partial/rate-limited summary.
 - Dedicated diagnostics table with account/status filters and per-event delete.
 
+### Daily Analysis, Summary Records, And Message Points
+
+Endpoints:
+
+- `GET` and `PATCH /manage/daily-package-schedule`
+- `GET` and `PATCH /manage/daily-summary-delivery`
+- `POST /manage/daily-packages`
+- `GET /manage/daily-package-runs`
+- `GET /manage/daily-package-runs/content`
+- `POST /manage/daily-summaries`
+- `POST` and `GET /manage/daily-summary-jobs`
+- `PATCH /manage/daily-summary-jobs/cancel`
+- `GET /manage/daily-summary-runs`
+- `GET /manage/daily-summary-runs/content`
+- `GET`, `PATCH`, and `DELETE /manage/daily-summary-records`
+- `GET /manage/daily-summary-records/item`
+- `GET /manage/daily-message-points`
+- `GET /manage/daily-message-points/item`
+
+Workflow semantics:
+
+- A scheduled or manual run continues the existing full analysis for the
+  selected account/origin/topic/tag scope. Important origins are not an input
+  restriction.
+- Core persists an independent `important_daily` summary artifact for important
+  origins alongside the full analysis.
+- Every origin, including important origins, participates in structured message
+  point extraction. Core validates and persists those points before generating
+  the `point_daily` summary.
+- Telegram delivers the independent important report when one is present, then
+  sends the point summary separately with the fixed `#point` tag. It does not
+  deliver the full per-origin analysis. Extraction, validation, persistence,
+  summary generation, and delivery remain Core-owned behavior.
+
+Summary record fields include:
+
+- `summary_id`, `run_id`, `package_run_id`
+- `record_type` (including `important_daily` and `point_daily`)
+- `date`, `timezone`, `scope`, `tags`, `important`, `provider`, `title`
+- `content_preview`, optional full `content_md`, and `content_json`
+- origin/group/image/content counts, deletion state, and timestamps
+
+`GET /manage/daily-message-points` returns an `items` array and supports filters
+for point/run/package IDs, date range, source, account/origin/topic/message IDs,
+tags, importance score range, important-origin state, text query, incomplete-run
+inclusion, and limit. `GET /manage/daily-message-points/item` requires
+`point_id`.
+
+Message point fields include:
+
+- identity and run context: `point_id`, `run_id`, `package_run_id`, `date`,
+  `timezone`
+- source identity: `source`, `account_id`, `origin_id`, `topic_id`, optional
+  `origin_title`, and optional `message_id`
+- content: `occurred_at`, `tags`, `tags_csv`, `content`, Telegram deeplink or
+  permalink, and heterogeneous `source_refs`
+- importance: `importance_score` from 1 through 5, optional
+  `importance_reason`, and `origin_important`
+- provider/run/job status and created/updated timestamps
+
+Mac V1:
+
+- Treat summary records and message points as read-only Core-owned analytical
+  state, except for the existing summary soft-delete/restore API.
+- Show summary `record_type` so full, important, and point-derived artifacts stay
+  distinguishable when one run produces multiple records.
+- Provide a dedicated Message Points table with filters, importance context,
+  source metadata, and persisted Telegram links; fetch item detail from Core
+  rather than caching a parallel archive.
+
 ## V1 API Client Boundary
 
 The app should expose feature-shaped methods, not raw URL construction in views:
@@ -459,6 +528,15 @@ Initial methods:
 - `listCaptureCursors(accountID:)`
 - `listOperationEvents(accountID:status:limit:)`
 - `listMediaFiles(accountID:chatID:messageID:limit:)`
+- `fetchDailyPackageSchedule()`
+- `updateDailyPackageSchedule(...)`
+- `runDailySummaryJob(...)`
+- `listDailySummaryJobs(...)`
+- `listDailySummaryRuns(...)`
+- `listDailySummaryRecords(...)`
+- `fetchDailySummaryRecord(...)`
+- `listDailyMessagePoints(...)`
+- `fetchDailyMessagePoint(pointID:)`
 
 ## V1 Implementation Order
 
@@ -473,5 +551,8 @@ Initial methods:
    display states.
 6. Diagnostics: participants, participant refresh, capture cursors, media files,
    operation events.
-7. Local core runner: start/stop/status for a configured local `tele-mess-core`
+7. Daily analysis: schedule/run progress, typed persisted summary records,
+   validated message points, record/item inspection, and Telegram delivery
+   configuration.
+8. Local core runner: start/stop/status for a configured local `tele-mess-core`
    command after remote profile support is stable.

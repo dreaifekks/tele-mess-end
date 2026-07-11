@@ -19,8 +19,11 @@ V1 surfaces:
 - Policies and tags: per-origin text/media/download toggles plus chip-style tag
   editing.
 - Messages and search: recent messages and full-text search backed by the core.
-- Daily summaries: Core-owned persisted records, package/summary job progress,
-  soft-delete/restore, schedule scope, and Telegram delivery targets.
+- Daily analysis: Core-owned persisted summary artifacts and validated message
+  points, package/summary job progress, soft-delete/restore, schedule scope, and
+  Telegram delivery targets. Full per-origin analysis continues for the selected
+  scope; Core delivers the independent important report when present, followed
+  by a separate point digest with fixed `#point`.
 - Diagnostics: operation events, capture cursors, participants, participant
   refresh, and media-file metadata.
 
@@ -58,8 +61,8 @@ V1 implementation scope is tracked in [`docs/v1-scope.md`](docs/v1-scope.md).
 ## Repository Status
 
 This repository contains the SwiftPM macOS app, typed Core API client,
-profile-scoped session/runtime state, Core-owned summary workflows, CI/release
-verification, and the project-local Codex Run action.
+profile-scoped session/runtime state, Core-owned summary and message-point
+workflows, CI/release verification, and the project-local Codex Run action.
 
 Run locally:
 
@@ -124,7 +127,8 @@ CORE_BASE_URL=http://127.0.0.1:8765 CORE_API_TOKEN=your-token ./script/smoke_cor
 
 This compiles the same typed client and checks `/healthz`, `/sync/state`, the API
 manifest/capabilities, accounts, origins, recent messages, operation events,
-participants, cursors, media metadata, and read-only daily-summary surfaces.
+participants, cursors, media metadata, and read-only daily-summary and
+message-point surfaces.
 
 ## License
 

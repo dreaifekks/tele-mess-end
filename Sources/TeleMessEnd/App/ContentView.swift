@@ -67,6 +67,8 @@ struct ContentView: View {
             OriginsView(model: model)
         case .messages:
             MessagesView(model: model)
+        case .messagePoints:
+            MessagePointsView(model: model)
         case .media:
             MediaView(model: model)
         case .summaries:

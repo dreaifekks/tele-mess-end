@@ -240,6 +240,13 @@ struct DailySummaryView: View {
             }
         }
 
+        TableColumn("Type", sortUsing: KeyPathComparator(\DailySummaryRecord.recordTypeSortValue)) { record in
+            recordCell(record) {
+                Label(record.recordTypeDisplayName, systemImage: summaryRecordTypeSystemImage(record.recordType))
+                    .lineLimit(1)
+            }
+        }
+
         TableColumn("Date", sortUsing: KeyPathComparator(\DailySummaryRecord.dateSortValue)) { record in
             recordCell(record) { Text(record.date ?? "") }
         }
@@ -515,6 +522,9 @@ private struct SummaryRecordDetailPanel: View {
                                     .help("Deleted")
                             }
                         }
+                        Label(record.recordTypeDisplayName, systemImage: summaryRecordTypeSystemImage(record.recordType))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         if selectedCount > 1 {
                             Text("\(selectedCount) records selected")
                                 .font(.caption)
@@ -531,6 +541,7 @@ private struct SummaryRecordDetailPanel: View {
                 }
 
                 LazyVGrid(columns: detailColumns, alignment: .leading, spacing: 8) {
+                    SummaryMetadataTile(title: "Type", value: record.recordTypeDisplayName)
                     SummaryMetadataTile(title: "Date", value: record.date ?? "-")
                     SummaryMetadataTile(title: "Provider", value: record.provider ?? "-")
                 }
@@ -577,6 +588,17 @@ private struct SummaryRecordDetailPanel: View {
             GridItem(.flexible(), spacing: 8, alignment: .leading),
             GridItem(.flexible(), spacing: 8, alignment: .leading)
         ]
+    }
+}
+
+private func summaryRecordTypeSystemImage(_ recordType: String) -> String {
+    switch recordType {
+    case "important_daily":
+        "star.fill"
+    case "point_daily":
+        "list.bullet.rectangle.portrait"
+    default:
+        "doc.text"
     }
 }
 

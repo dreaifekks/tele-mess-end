@@ -118,6 +118,16 @@ struct SettingsView: View {
                             Label("Clear Token", systemImage: "key.slash")
                         }
                     }
+                    if let error = model.lastError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                    } else if model.statusMessage != "Ready" {
+                        Label(model.statusMessage, systemImage: "checkmark.circle")
+                            .foregroundStyle(.secondary)
+                            .font(.callout)
+                    }
                 }
 
                 if draft.kind == .local {

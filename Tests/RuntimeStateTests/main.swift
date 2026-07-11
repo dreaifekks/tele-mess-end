@@ -26,6 +26,15 @@ enum RuntimeStateTests {
         await runner.run("protected local token never degrades to no auth") {
             try await protectedLocalTokenDoesNotDegrade()
         }
+        await runner.run("legacy token migrates without deletion") {
+            try legacyTokenMigratesWithoutDeletion()
+        }
+        await runner.run("inaccessible managed token rotates on save") {
+            try inaccessibleManagedTokenRotatesOnSave()
+        }
+        await runner.run("managed clear masks a legacy token") {
+            try managedClearMasksLegacyToken()
+        }
         await runner.run("saving the same profile advances the session") {
             try sameProfileSaveAdvancesSession()
         }
@@ -215,6 +224,66 @@ enum RuntimeStateTests {
             model.lastError,
             KeychainError(status: errSecInteractionNotAllowed).localizedDescription
         )
+    }
+
+    private static func legacyTokenMigratesWithoutDeletion() throws {
+        let profileID = UUID()
+        let backend = MemoryKeychainItemBackend()
+        let namespaces = MemoryCredentialNamespaceStore()
+        let legacyService = "com.dreaifekks.TeleMessEnd.coreToken"
+        backend.values[legacyService] = "legacy-token"
+        let store = KeychainStore(backend: backend, namespaceStore: namespaces)
+
+        let token = try store.readToken(profileID: profileID, allowAuthenticationUI: false)
+
+        try expectEqual(token, "legacy-token")
+        guard let managedService = namespaces.service(profileID: profileID) else {
+            throw RuntimeTestError.failure("Expected a managed credential namespace")
+        }
+        try expectEqual(backend.values[managedService], "legacy-token")
+        try expectEqual(backend.values[legacyService], "legacy-token")
+    }
+
+    private static func inaccessibleManagedTokenRotatesOnSave() throws {
+        let profileID = UUID()
+        let backend = MemoryKeychainItemBackend()
+        let namespaces = MemoryCredentialNamespaceStore()
+        let inaccessibleService = "managed-inaccessible"
+        namespaces.selectService(inaccessibleService, profileID: profileID)
+        backend.values[inaccessibleService] = "old-token"
+        backend.upsertFailures[inaccessibleService] = KeychainError(status: errSecAuthFailed)
+        let store = KeychainStore(backend: backend, namespaceStore: namespaces)
+
+        try store.saveToken("replacement-token", profileID: profileID)
+
+        guard let replacementService = namespaces.service(profileID: profileID) else {
+            throw RuntimeTestError.failure("Expected a replacement credential namespace")
+        }
+        try expectEqual(replacementService == inaccessibleService, false)
+        try expectEqual(backend.values[inaccessibleService], "old-token")
+        try expectEqual(backend.values[replacementService], "replacement-token")
+        try expectEqual(
+            store.readToken(profileID: profileID, allowAuthenticationUI: false),
+            "replacement-token"
+        )
+    }
+
+    private static func managedClearMasksLegacyToken() throws {
+        let profileID = UUID()
+        let backend = MemoryKeychainItemBackend()
+        let namespaces = MemoryCredentialNamespaceStore()
+        let legacyService = "com.dreaifekks.TeleMessEnd.coreToken"
+        backend.values[legacyService] = "legacy-token"
+        let store = KeychainStore(backend: backend, namespaceStore: namespaces)
+
+        try store.clearToken(profileID: profileID)
+
+        try expectNil(store.readToken(profileID: profileID, allowAuthenticationUI: false))
+        try expectEqual(backend.values[legacyService], "legacy-token")
+        guard let managedService = namespaces.service(profileID: profileID) else {
+            throw RuntimeTestError.failure("Expected a managed credential tombstone")
+        }
+        try expectEqual(backend.values[managedService], "")
     }
 
     @MainActor
@@ -452,6 +521,7 @@ private let defaultsSuiteName = "TeleMessEndTests.RuntimeSession"
 private struct EmptyCredentialStore: CredentialStore {
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { nil }
     func saveToken(_ token: String, profileID: UUID) throws {}
+    func clearToken(profileID: UUID) throws {}
     func deleteToken(profileID: UUID) throws {}
 }
 
@@ -461,7 +531,48 @@ private struct InteractionBlockedCredentialStore: CredentialStore {
     }
 
     func saveToken(_ token: String, profileID: UUID) throws {}
+    func clearToken(profileID: UUID) throws {}
     func deleteToken(profileID: UUID) throws {}
+}
+
+private final class MemoryKeychainItemBackend: KeychainItemBackend, @unchecked Sendable {
+    var values: [String: String] = [:]
+    var readFailures: [String: KeychainError] = [:]
+    var upsertFailures: [String: KeychainError] = [:]
+    var deleteFailures: [String: KeychainError] = [:]
+
+    func read(service: String, profileID: UUID, allowAuthenticationUI: Bool) throws -> String? {
+        if let failure = readFailures[service] {
+            throw failure
+        }
+        return values[service]
+    }
+
+    func upsert(_ value: String, service: String, profileID: UUID) throws {
+        if let failure = upsertFailures[service] {
+            throw failure
+        }
+        values[service] = value
+    }
+
+    func delete(service: String, profileID: UUID) throws {
+        if let failure = deleteFailures[service] {
+            throw failure
+        }
+        values.removeValue(forKey: service)
+    }
+}
+
+private final class MemoryCredentialNamespaceStore: CredentialNamespaceStore, @unchecked Sendable {
+    private var services: [UUID: String] = [:]
+
+    func service(profileID: UUID) -> String? {
+        services[profileID]
+    }
+
+    func selectService(_ service: String?, profileID: UUID) {
+        services[profileID] = service
+    }
 }
 
 private struct DashboardTransport: CoreHTTPTransport {

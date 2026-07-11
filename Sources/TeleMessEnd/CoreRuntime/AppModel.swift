@@ -1051,7 +1051,7 @@ final class AppModel {
         do {
             if let token {
                 if token.isEmpty {
-                    try keychain.deleteToken(profileID: profile.id)
+                    try keychain.clearToken(profileID: profile.id)
                 } else {
                     try keychain.saveToken(token, profileID: profile.id)
                 }

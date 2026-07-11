@@ -56,15 +56,38 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
+if command -v /usr/bin/xattr >/dev/null 2>&1; then
+  /usr/bin/xattr -cr "$APP_BUNDLE"
+fi
+
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   codesign_args=(--force --sign "$CODESIGN_IDENTITY")
   if [[ "${CODESIGN_HARDENED_RUNTIME:-0}" == "1" ]]; then
     codesign_args+=(--options runtime)
   fi
+  if [[ -n "${CODESIGN_ENTITLEMENTS:-}" ]]; then
+    codesign_args+=(--entitlements "$CODESIGN_ENTITLEMENTS")
+  fi
+  if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then
+    codesign_args+=(--keychain "$CODESIGN_KEYCHAIN")
+  fi
   /usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
 else
+  echo "warning: using ad-hoc signing; Keychain credentials may require replacement after rebuilds" >&2
   /usr/bin/codesign --force --sign - "$APP_BUNDLE"
 fi
+
+verify_signature() {
+  if command -v /usr/bin/xattr >/dev/null 2>&1; then
+    /usr/bin/xattr -cr "$APP_BUNDLE"
+  fi
+  # The workspace can be FileProvider-backed, which may immediately attach
+  # FinderInfo to a launched bundle. Verify the live local signature without
+  # treating that external metadata as signed content. Packaging remains strict.
+  /usr/bin/codesign --verify --verbose=4 "$APP_BUNDLE"
+}
+
+verify_signature
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
@@ -89,6 +112,7 @@ case "$MODE" in
     open_app
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
+    verify_signature
     ;;
   *)
     echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2

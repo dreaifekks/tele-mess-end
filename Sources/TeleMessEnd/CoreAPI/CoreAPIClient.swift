@@ -19,17 +19,20 @@ struct CoreAPIClient: Sendable {
     var tokenProvider: any AuthTokenProvider
     var authMode: CoreAuthMode
     var transport: any CoreHTTPTransport
+    var logger: AppRuntimeLogger
 
     init(
         baseURL: URL,
         tokenProvider: any AuthTokenProvider = EmptyTokenProvider(),
         authMode: CoreAuthMode = .bearer,
-        transport: any CoreHTTPTransport = URLSession.shared
+        transport: any CoreHTTPTransport = URLSession.shared,
+        logger: AppRuntimeLogger = AppLog.api
     ) {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
         self.authMode = authMode
         self.transport = transport
+        self.logger = logger
     }
 
     func health() async throws -> CoreState {
@@ -610,8 +613,11 @@ struct CoreAPIClient: Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
+        let startedAt = Date()
+        logger.debug("Core request begin method=\(method) path=\(path)")
         do {
             let (data, response) = try await transport.data(for: request)
+            logResponse(method: method, path: path, status: response.statusCode, startedAt: startedAt)
             guard (200..<300).contains(response.statusCode) else {
                 let payload = try? JSONDecoder.core.decode(CoreAPIErrorPayload.self, from: data)
                 let detail = payload?.detail ?? payload?.message ?? payload?.error ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
@@ -619,22 +625,29 @@ struct CoreAPIClient: Sendable {
             }
             return try JSONDecoder.core.decode(Response.self, from: data)
         } catch is CancellationError {
+            logCancellation(method: method, path: path, startedAt: startedAt)
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
+            logCancellation(method: method, path: path, startedAt: startedAt)
             throw CancellationError()
         } catch let error as CoreAPIError {
             throw error
         } catch let error as DecodingError {
+            logger.error("Core response decode failed method=\(method) path=\(path) durationMs=\(elapsedMilliseconds(since: startedAt))")
             throw CoreAPIError.transport("Could not decode core response: \(error)")
         } catch {
+            logger.error("Core request transport failed method=\(method) path=\(path) error=\(String(describing: type(of: error))) durationMs=\(elapsedMilliseconds(since: startedAt))")
             throw CoreAPIError.transport(error.localizedDescription)
         }
     }
 
     private func data(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> Data {
         let request = try makeRequest(method, path: path, query: query, accept: "application/octet-stream")
+        let startedAt = Date()
+        logger.debug("Core request begin method=\(method) path=\(path)")
         do {
             let (data, response) = try await transport.data(for: request)
+            logResponse(method: method, path: path, status: response.statusCode, startedAt: startedAt)
             guard (200..<300).contains(response.statusCode) else {
                 let payload = try? JSONDecoder.core.decode(CoreAPIErrorPayload.self, from: data)
                 let detail = payload?.detail ?? payload?.message ?? payload?.error ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
@@ -642,20 +655,26 @@ struct CoreAPIClient: Sendable {
             }
             return data
         } catch is CancellationError {
+            logCancellation(method: method, path: path, startedAt: startedAt)
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
+            logCancellation(method: method, path: path, startedAt: startedAt)
             throw CancellationError()
         } catch let error as CoreAPIError {
             throw error
         } catch {
+            logger.error("Core request transport failed method=\(method) path=\(path) error=\(String(describing: type(of: error))) durationMs=\(elapsedMilliseconds(since: startedAt))")
             throw CoreAPIError.transport(error.localizedDescription)
         }
     }
 
     private func text(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> String {
         let request = try makeRequest(method, path: path, query: query, accept: "text/markdown")
+        let startedAt = Date()
+        logger.debug("Core request begin method=\(method) path=\(path)")
         do {
             let (data, response) = try await transport.data(for: request)
+            logResponse(method: method, path: path, status: response.statusCode, startedAt: startedAt)
             guard (200..<300).contains(response.statusCode) else {
                 let payload = try? JSONDecoder.core.decode(CoreAPIErrorPayload.self, from: data)
                 let detail = payload?.detail ?? payload?.message ?? payload?.error ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
@@ -666,14 +685,34 @@ struct CoreAPIClient: Sendable {
             }
             return value
         } catch is CancellationError {
+            logCancellation(method: method, path: path, startedAt: startedAt)
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
+            logCancellation(method: method, path: path, startedAt: startedAt)
             throw CancellationError()
         } catch let error as CoreAPIError {
             throw error
         } catch {
+            logger.error("Core request transport failed method=\(method) path=\(path) error=\(String(describing: type(of: error))) durationMs=\(elapsedMilliseconds(since: startedAt))")
             throw CoreAPIError.transport(error.localizedDescription)
         }
+    }
+
+    private func logResponse(method: String, path: String, status: Int, startedAt: Date) {
+        let message = "Core request end method=\(method) path=\(path) status=\(status) durationMs=\(elapsedMilliseconds(since: startedAt))"
+        if (200..<300).contains(status) {
+            logger.info(message)
+        } else {
+            logger.warning(message)
+        }
+    }
+
+    private func logCancellation(method: String, path: String, startedAt: Date) {
+        logger.debug("Core request cancelled method=\(method) path=\(path) durationMs=\(elapsedMilliseconds(since: startedAt))")
+    }
+
+    private func elapsedMilliseconds(since startedAt: Date) -> Int {
+        max(0, Int(Date().timeIntervalSince(startedAt) * 1_000))
     }
 
     private func makeRequest(_ method: String, path: String, query: [URLQueryItem], accept: String = "application/json") throws -> URLRequest {

@@ -35,6 +35,24 @@ enum RuntimeStateTests {
         await runner.run("managed clear masks a legacy token") {
             try managedClearMasksLegacyToken()
         }
+        await runner.run("runtime log buffer is bounded and clearable") {
+            try runtimeLogBufferIsBoundedAndClearable()
+        }
+        await runner.run("runtime log store follows concurrent writers") {
+            try await runtimeLogStoreFollowsConcurrentWriters()
+        }
+        await runner.run("Core output clear keeps later process output") {
+            try await coreOutputClearKeepsLaterProcessOutput()
+        }
+        await runner.run("keychain runtime logs omit credential material") {
+            try keychainRuntimeLogsOmitCredentialMaterial()
+        }
+        await runner.run("app operation failures emit safe runtime logs") {
+            try await appOperationFailuresEmitSafeRuntimeLogs()
+        }
+        await runner.run("API runtime logs omit auth and query values") {
+            try await apiRuntimeLogsOmitAuthAndQueryValues()
+        }
         await runner.run("saving the same profile advances the session") {
             try sameProfileSaveAdvancesSession()
         }
@@ -284,6 +302,165 @@ enum RuntimeStateTests {
             throw RuntimeTestError.failure("Expected a managed credential tombstone")
         }
         try expectEqual(backend.values[managedService], "")
+    }
+
+    private static func runtimeLogBufferIsBoundedAndClearable() throws {
+        let buffer = AppRuntimeLogBuffer(maximumEntries: 2, maximumCharacters: 1_000)
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+
+        logger.info("first")
+        logger.warning("second")
+        logger.error("third")
+
+        try expectEqual(buffer.snapshot().entries.map(\.event.message), ["second", "third"])
+        try expectEqual(buffer.clear().entries.isEmpty, true)
+        try expectEqual(buffer.snapshot().entries.isEmpty, true)
+    }
+
+    @MainActor
+    private static func runtimeLogStoreFollowsConcurrentWriters() async throws {
+        let buffer = AppRuntimeLogBuffer(maximumEntries: 200, maximumCharacters: 20_000)
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let store = AppRuntimeLogStore(buffer: buffer)
+        store.startMonitoring()
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<100 {
+                group.addTask {
+                    logger.info("concurrent entry \(index)")
+                }
+            }
+        }
+
+        for _ in 0..<100 where store.entries.count < 100 {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        try expectEqual(store.entries.count, 100)
+        try expectEqual(store.entries.map(\.id), (1...100).map(UInt64.init))
+    }
+
+    @MainActor
+    private static func coreOutputClearKeepsLaterProcessOutput() async throws {
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let runner = LocalCoreProcessController(logger: logger)
+        var profile = CoreProfile.defaultLocal
+        profile.localCommand = "printf before-clear; sleep 0.15; printf after-clear"
+        runner.start(profile: profile)
+        defer { runner.stop() }
+
+        for _ in 0..<100 where !runner.lastOutput.contains("before-clear") {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        try expectEqual(runner.lastOutput.contains("before-clear"), true)
+        runner.clearOutput()
+
+        for _ in 0..<200 where runner.isRunning || runner.lastOutput != "after-clear" {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        try expectEqual(runner.lastOutput, "after-clear")
+    }
+
+    private static func keychainRuntimeLogsOmitCredentialMaterial() throws {
+        let profileID = UUID(uuidString: "11111111-2222-3333-4444-555566667777")!
+        let token = "super-secret-token"
+        let legacyService = "com.dreaifekks.TeleMessEnd.coreToken"
+        let backend = MemoryKeychainItemBackend()
+        backend.values[legacyService] = token
+        let namespaces = MemoryCredentialNamespaceStore()
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let store = KeychainStore(backend: backend, namespaceStore: namespaces, logger: logger)
+
+        try expectEqual(store.readToken(profileID: profileID, allowAuthenticationUI: false), token)
+
+        let rendered = buffer.snapshot().entries.map(\.renderedLine).joined(separator: "\n")
+        try expectEqual(rendered.contains(String(profileID.uuidString.suffix(8))), true)
+        try expectEqual(rendered.contains(profileID.uuidString), false)
+        try expectEqual(rendered.contains(token), false)
+        try expectEqual(rendered.contains(legacyService), false)
+    }
+
+    @MainActor
+    private static func appOperationFailuresEmitSafeRuntimeLogs() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: FailIfCalledTransport(),
+            runtimeLogs: AppRuntimeLogStore(buffer: buffer),
+            runtimeLogger: logger,
+            apiLogger: logger
+        )
+        var remote = model.addRemoteProfile()
+        remote.baseURLString = "http://core.example"
+        try expectEqual(model.saveProfile(remote, token: nil), true)
+        buffer.clear()
+
+        await model.loadDashboard(allowKeychainUI: false)
+
+        let rendered = buffer.snapshot().entries.map(\.renderedLine).joined(separator: "\n")
+        try expectEqual(
+            rendered.contains("Operation end action=Loading dashboard result=failure error=missing_token"),
+            true
+        )
+        try expectEqual(rendered.contains(remote.id.uuidString), false)
+    }
+
+    private static func apiRuntimeLogsOmitAuthAndQueryValues() async throws {
+        let token = "top-secret-api-token"
+        let query = "private-search-phrase"
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "api",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let client = CoreAPIClient(
+            baseURL: URL(string: "http://core.example")!,
+            tokenProvider: FixedTokenProvider(value: token),
+            authMode: .bearer,
+            transport: PrivateSearchTransport(expectedToken: token, expectedQuery: query),
+            logger: logger
+        )
+
+        _ = try await client.searchMessages(query: query)
+
+        let rendered = buffer.snapshot().entries.map(\.renderedLine).joined(separator: "\n")
+        try expectEqual(rendered.contains("method=GET path=/sync/search status=200"), true)
+        try expectEqual(rendered.contains(token), false)
+        try expectEqual(rendered.contains(query), false)
+        try expectEqual(rendered.localizedCaseInsensitiveContains("authorization"), false)
     }
 
     @MainActor
@@ -602,6 +779,22 @@ private struct DashboardTransport: CoreHTTPTransport {
 private struct FailIfCalledTransport: CoreHTTPTransport {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         throw RuntimeTestError.failure("Transport should not be called without a remote profile token")
+    }
+}
+
+private struct PrivateSearchTransport: CoreHTTPTransport {
+    var expectedToken: String
+    var expectedQuery: String
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.value(forHTTPHeaderField: "Authorization") == "Bearer \(expectedToken)" else {
+            throw RuntimeTestError.failure("Expected bearer authentication header")
+        }
+        guard request.url?.path == "/sync/search",
+              queryValues(request)["q"] == [expectedQuery] else {
+            throw RuntimeTestError.failure("Expected private search query")
+        }
+        return try response(for: request, json: #"{"items":[]}"#)
     }
 }
 

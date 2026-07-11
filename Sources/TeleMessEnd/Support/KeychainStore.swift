@@ -56,15 +56,22 @@ struct KeychainStore: CredentialStore, Sendable {
     private let managedServicePrefix = "com.dreaifekks.TeleMessEnd.coreToken.managed"
     private let backend: any KeychainItemBackend
     private let namespaceStore: any CredentialNamespaceStore
+    private let logger: AppRuntimeLogger
 
     init() {
         backend = SystemKeychainItemBackend()
         namespaceStore = UserDefaultsCredentialNamespaceStore()
+        logger = AppLog.runtime
     }
 
-    init(backend: any KeychainItemBackend, namespaceStore: any CredentialNamespaceStore) {
+    init(
+        backend: any KeychainItemBackend,
+        namespaceStore: any CredentialNamespaceStore,
+        logger: AppRuntimeLogger = AppLog.runtime
+    ) {
         self.backend = backend
         self.namespaceStore = namespaceStore
+        self.logger = logger
     }
 
     func readToken(profileID: UUID, allowAuthenticationUI: Bool = true) throws -> String? {
@@ -91,7 +98,7 @@ struct KeychainStore: CredentialStore, Sendable {
             try writeManaged(legacyToken, profileID: profileID)
         } catch {
             let suffix = String(profileID.uuidString.suffix(8))
-            AppLog.runtime.info("Legacy Keychain migration deferred profileSuffix=\(suffix, privacy: .public)")
+            logger.warning("Legacy Keychain migration deferred profileSuffix=\(suffix)")
         }
         return legacyToken.isEmpty ? nil : legacyToken
     }
@@ -138,20 +145,34 @@ struct KeychainStore: CredentialStore, Sendable {
                 return
             } catch let error as KeychainError where error.isAuthenticationFailure {
                 let suffix = String(profileID.uuidString.suffix(8))
-                AppLog.runtime.info("Rotating inaccessible Keychain item profileSuffix=\(suffix, privacy: .public)")
+                logger.info("Rotating inaccessible Keychain item profileSuffix=\(suffix)")
             }
         }
 
         let replacementService = managedServicePrefix + "." + UUID().uuidString
-        try backend.upsert(value, service: replacementService, profileID: profileID)
+        do {
+            try backend.upsert(value, service: replacementService, profileID: profileID)
+        } catch {
+            let suffix = String(profileID.uuidString.suffix(8))
+            logger.error("Managed Keychain write failed profileSuffix=\(suffix) error=\(safeKeychainErrorSummary(error))")
+            throw error
+        }
         namespaceStore.selectService(replacementService, profileID: profileID)
+        let suffix = String(profileID.uuidString.suffix(8))
+        logger.info("Managed Keychain namespace selected profileSuffix=\(suffix)")
     }
 }
 
 struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
+    private let logger: AppRuntimeLogger
+
+    init(logger: AppRuntimeLogger = AppLog.runtime) {
+        self.logger = logger
+    }
+
     func read(service: String, profileID: UUID, allowAuthenticationUI: Bool) throws -> String? {
         let profileSuffix = String(profileID.uuidString.suffix(8))
-        AppLog.runtime.info("Keychain read begin profileSuffix=\(profileSuffix, privacy: .public) allowUI=\(allowAuthenticationUI, privacy: .public)")
+        logger.info("Keychain read begin profileSuffix=\(profileSuffix) allowUI=\(allowAuthenticationUI)")
         var query = matchQuery(service: service, profileID: profileID)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -164,7 +185,7 @@ struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        AppLog.runtime.info("Keychain read end profileSuffix=\(profileSuffix, privacy: .public) status=\(status, privacy: .public)")
+        logger.info("Keychain read end profileSuffix=\(profileSuffix) status=\(status)")
         if status == errSecItemNotFound {
             return nil
         }
@@ -180,7 +201,7 @@ struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
 
     func upsert(_ value: String, service: String, profileID: UUID) throws {
         let profileSuffix = String(profileID.uuidString.suffix(8))
-        AppLog.runtime.info("Keychain save begin profileSuffix=\(profileSuffix, privacy: .public)")
+        logger.info("Keychain save begin profileSuffix=\(profileSuffix)")
         let data = Data(value.utf8)
         var query = matchQuery(service: service, profileID: profileID)
         let attributes: [String: Any] = [
@@ -191,23 +212,23 @@ struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
             query[kSecValueData as String] = data
             query[kSecAttrLabel as String] = "TeleMessEnd Core token"
             let addStatus = SecItemAdd(query as CFDictionary, nil)
-            AppLog.runtime.info("Keychain save add end profileSuffix=\(profileSuffix, privacy: .public) status=\(addStatus, privacy: .public)")
+            logger.info("Keychain save add end profileSuffix=\(profileSuffix) status=\(addStatus)")
             guard addStatus == errSecSuccess else {
                 throw KeychainError(status: addStatus)
             }
         } else if status != errSecSuccess {
-            AppLog.runtime.info("Keychain save update end profileSuffix=\(profileSuffix, privacy: .public) status=\(status, privacy: .public)")
+            logger.error("Keychain save update end profileSuffix=\(profileSuffix) status=\(status)")
             throw KeychainError(status: status)
         } else {
-            AppLog.runtime.info("Keychain save update end profileSuffix=\(profileSuffix, privacy: .public) status=\(status, privacy: .public)")
+            logger.info("Keychain save update end profileSuffix=\(profileSuffix) status=\(status)")
         }
     }
 
     func delete(service: String, profileID: UUID) throws {
         let profileSuffix = String(profileID.uuidString.suffix(8))
-        AppLog.runtime.info("Keychain delete begin profileSuffix=\(profileSuffix, privacy: .public)")
+        logger.info("Keychain delete begin profileSuffix=\(profileSuffix)")
         let status = SecItemDelete(matchQuery(service: service, profileID: profileID) as CFDictionary)
-        AppLog.runtime.info("Keychain delete end profileSuffix=\(profileSuffix, privacy: .public) status=\(status, privacy: .public)")
+        logger.info("Keychain delete end profileSuffix=\(profileSuffix) status=\(status)")
         if status != errSecSuccess && status != errSecItemNotFound {
             throw KeychainError(status: status)
         }
@@ -220,6 +241,13 @@ struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
             kSecAttrAccount as String: profileID.uuidString
         ]
     }
+}
+
+private func safeKeychainErrorSummary(_ error: Error) -> String {
+    if let error = error as? KeychainError {
+        return "status_\(error.status)"
+    }
+    return String(describing: type(of: error))
 }
 
 struct KeychainError: LocalizedError, Equatable {

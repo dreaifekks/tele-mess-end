@@ -142,7 +142,10 @@ final class AppModel {
     let summarySettingsStore: SummarySettingsStore
     let keychain: any CredentialStore
     let localRunner: LocalCoreProcessController
+    let runtimeLogs: AppRuntimeLogStore
     @ObservationIgnored private let transport: any CoreHTTPTransport
+    @ObservationIgnored private let runtimeLogger: AppRuntimeLogger
+    @ObservationIgnored private let apiLogger: AppRuntimeLogger
     @ObservationIgnored private var tokenCache: CachedProfileToken?
     @ObservationIgnored private var isRecentMessageRefreshLoopRunning = false
     @ObservationIgnored private var isDailySummaryProgressLoopRunning = false
@@ -208,16 +211,26 @@ final class AppModel {
         summarySettingsStore: SummarySettingsStore? = nil,
         keychain: any CredentialStore = KeychainStore(),
         localRunner: LocalCoreProcessController? = nil,
-        transport: any CoreHTTPTransport = URLSession.shared
+        transport: any CoreHTTPTransport = URLSession.shared,
+        runtimeLogs: AppRuntimeLogStore? = nil,
+        runtimeLogger: AppRuntimeLogger = AppLog.runtime,
+        apiLogger: AppRuntimeLogger = AppLog.api
     ) {
         let resolvedProfileStore = profileStore ?? CoreProfileStore()
         let resolvedSummarySettingsStore = summarySettingsStore ?? SummarySettingsStore()
+        let resolvedRuntimeLogs = runtimeLogs ?? AppRuntimeLogStore()
         self.profileStore = resolvedProfileStore
         self.summarySettingsStore = resolvedSummarySettingsStore
         self.keychain = keychain
-        self.localRunner = localRunner ?? LocalCoreProcessController()
+        self.localRunner = localRunner ?? LocalCoreProcessController(logger: runtimeLogger)
         self.transport = transport
+        self.runtimeLogs = resolvedRuntimeLogs
+        self.runtimeLogger = runtimeLogger
+        self.apiLogger = apiLogger
         resolvedSummarySettingsStore.selectProfile(resolvedProfileStore.selectedProfileID)
+        resolvedRuntimeLogs.startMonitoring()
+        let profileSuffix = resolvedProfileStore.selectedProfileID.map { String($0.uuidString.suffix(8)) } ?? "none"
+        runtimeLogger.info("App model initialized profileSuffix=\(profileSuffix)")
     }
 
     var selectedProfile: CoreProfile? {
@@ -254,12 +267,15 @@ final class AppModel {
         }
         guard profileStore.selectedProfileID != resolvedID else { return }
         profileStore.select(resolvedID)
+        let profileSuffix = resolvedID.map { String($0.uuidString.suffix(8)) } ?? "none"
+        runtimeLogger.info("Profile selected profileSuffix=\(profileSuffix)")
         beginProfileSession()
     }
 
     @discardableResult
     func addRemoteProfile() -> CoreProfile {
         let profile = profileStore.addRemoteProfile()
+        runtimeLogger.info("Remote profile added profileSuffix=\(String(profile.id.uuidString.suffix(8)))")
         beginProfileSession()
         return profile
     }
@@ -267,6 +283,7 @@ final class AppModel {
     @discardableResult
     func addLocalProfile() -> CoreProfile {
         let profile = profileStore.addLocalProfile()
+        runtimeLogger.info("Local profile added profileSuffix=\(String(profile.id.uuidString.suffix(8)))")
         beginProfileSession()
         return profile
     }
@@ -446,7 +463,10 @@ final class AppModel {
             if messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 messages = loadedMessages
             }
+        } catch is CancellationError {
+            return
         } catch {
+            runtimeLogger.warning("Background recent messages refresh failed error=\(safeRuntimeErrorSummary(error))")
             return
         }
     }
@@ -883,7 +903,10 @@ final class AppModel {
             let snapshot = try await fetchDailySummarySnapshot(using: session.client)
             try ensureCurrent(session, dailySummaryRevision: requestRevision)
             applyDailySummarySnapshot(snapshot)
+        } catch is CancellationError {
+            return
         } catch {
+            runtimeLogger.warning("Background daily summary refresh failed error=\(safeRuntimeErrorSummary(error))")
             return
         }
     }
@@ -1048,6 +1071,14 @@ final class AppModel {
 
     @discardableResult
     func saveProfile(_ profile: CoreProfile, token: String?) -> Bool {
+        let profileSuffix = String(profile.id.uuidString.suffix(8))
+        let credentialAction: String
+        if let token {
+            credentialAction = token.isEmpty ? "clear" : "replace"
+        } else {
+            credentialAction = "unchanged"
+        }
+        runtimeLogger.info("Profile save begin profileSuffix=\(profileSuffix) credential=\(credentialAction)")
         do {
             if let token {
                 if token.isEmpty {
@@ -1065,10 +1096,12 @@ final class AppModel {
             }
             statusMessage = "Profile saved"
             lastError = nil
+            runtimeLogger.info("Profile save end profileSuffix=\(profileSuffix) result=success")
             return true
         } catch {
             lastError = error.localizedDescription
             statusMessage = "Failed"
+            runtimeLogger.error("Profile save end profileSuffix=\(profileSuffix) result=failure error=\(safeRuntimeErrorSummary(error))")
             return false
         }
     }
@@ -1076,16 +1109,20 @@ final class AppModel {
     @discardableResult
     func deleteSelectedProfile() -> Bool {
         guard let removed = profileStore.deleteSelected() else { return false }
+        let profileSuffix = String(removed.id.uuidString.suffix(8))
+        runtimeLogger.info("Profile delete begin profileSuffix=\(profileSuffix)")
         beginProfileSession()
         summarySettingsStore.removeProfile(removed.id)
         do {
             try keychain.deleteToken(profileID: removed.id)
             statusMessage = "Profile deleted"
             lastError = nil
+            runtimeLogger.info("Profile delete end profileSuffix=\(profileSuffix) result=success")
             return true
         } catch {
             lastError = "Profile deleted, but its saved token could not be removed: \(error.localizedDescription)"
             statusMessage = "Profile deleted"
+            runtimeLogger.warning("Profile delete end profileSuffix=\(profileSuffix) result=credential_cleanup_failed error=\(safeRuntimeErrorSummary(error))")
             return true
         }
     }
@@ -1170,7 +1207,8 @@ final class AppModel {
                 baseURL: baseURL,
                 tokenProvider: FixedTokenProvider(value: token),
                 authMode: profile.authMode,
-                transport: transport
+                transport: transport,
+                logger: apiLogger
             )
         )
     }
@@ -1186,7 +1224,8 @@ final class AppModel {
             self.tokenCache = nil
         }
 
-        AppLog.runtime.info("Reading Keychain token for profile \(profile.id.uuidString, privacy: .public)")
+        let profileSuffix = String(profile.id.uuidString.suffix(8))
+        runtimeLogger.info("Reading Keychain token profileSuffix=\(profileSuffix) allowUI=\(tokenReadMode == .promptIfNeeded)")
         do {
             let token = try keychain.readToken(
                 profileID: profile.id,
@@ -1476,9 +1515,12 @@ final class AppModel {
         if !activeOperations.isEmpty {
             guard scope == .messages,
                   activeOperations.values.allSatisfy({ $0 == .messages }) else {
+                runtimeLogger.debug("Operation skipped action=\(action) reason=busy")
                 return false
             }
         }
+        let scopeLabel = scope == .messages ? "messages" : "exclusive"
+        runtimeLogger.info("Operation begin action=\(action) scope=\(scopeLabel)")
         activeOperations[operationID] = scope
         latestOperationIDs[scope] = operationID
         isLoading = !activeOperations.isEmpty
@@ -1496,10 +1538,13 @@ final class AppModel {
             let session = try makeSession(tokenReadMode: tokenReadMode)
             try await operation(session)
             try ensureCurrent(session)
+            runtimeLogger.info("Operation end action=\(action) result=success")
             return true
         } catch is CancellationError {
+            runtimeLogger.debug("Operation end action=\(action) result=cancelled")
             return false
         } catch {
+            runtimeLogger.error("Operation end action=\(action) result=failure error=\(safeRuntimeErrorSummary(error))")
             if startingGeneration == sessionRevision,
                latestOperationIDs[scope] == operationID {
                 lastError = error.localizedDescription
@@ -1507,6 +1552,38 @@ final class AppModel {
             }
             return false
         }
+    }
+
+    private func safeRuntimeErrorSummary(_ error: Error) -> String {
+        if let error = error as? KeychainError {
+            return "keychain_status_\(error.status)"
+        }
+        if let error = error as? CoreAPIError {
+            switch error {
+            case .invalidBaseURL:
+                return "invalid_base_url"
+            case .invalidResponse:
+                return "invalid_response"
+            case .httpStatus(let status, _):
+                return "http_status_\(status)"
+            case .missingProfile:
+                return "missing_profile"
+            case .missingToken:
+                return "missing_token"
+            case .transport:
+                return "transport_error"
+            }
+        }
+        if let error = error as? PartialMutationError {
+            return "partial_mutation_\(error.completed)_of_\(error.total)"
+        }
+        if let error = error as? URLError {
+            return "url_error_\(error.code.rawValue)"
+        }
+        if error is DecodingError {
+            return "decoding_error"
+        }
+        return String(describing: type(of: error))
     }
 
     private func sortDailySummaryRecords(_ records: [DailySummaryRecord]) -> [DailySummaryRecord] {

@@ -5,6 +5,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        AppLog.runtime.info("Application launched")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        AppLog.runtime.info("Application will terminate")
     }
 }
 

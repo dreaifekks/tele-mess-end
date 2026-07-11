@@ -154,17 +154,15 @@ struct SettingsView: View {
                             Text(error)
                                 .foregroundStyle(.red)
                         }
-                        ScrollView {
-                            Text(model.localRunner.lastOutput.isEmpty ? "No output yet." : model.localRunner.lastOutput)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .padding(8)
-                        }
-                        .frame(minHeight: 110)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
+                }
+
+                Section("Runtime Logs") {
+                    RuntimeLogsView(
+                        appLogs: model.runtimeLogs,
+                        localRunner: model.localRunner,
+                        showsCoreProcess: draft.kind == .local
+                    )
                 }
 
                 Section("Actions") {

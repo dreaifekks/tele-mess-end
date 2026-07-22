@@ -37,7 +37,8 @@ Give one operator a reliable Mac app to:
 
 - Saved profiles for:
   - remote core: base URL plus token
-  - local core: executable/config command plus token
+  - managed local core: pinned PyPI version, absolute workspace, and token
+  - custom local core: explicit command and optional working directory
 - Keychain token storage.
 - Bearer auth by default, `X-Api-Token` compatibility in the client layer.
 - Profile validation through `/healthz`, `/sync/state`, and
@@ -143,12 +144,21 @@ Give one operator a reliable Mac app to:
 
 ### Local Core Runner
 
-- Local profile can run a configured `tele-mess-core run-server --config ...`
-  command.
-- Start, stop, and status actions.
-- Show process/log errors in the app.
-- Remote profile support comes first; local runner can land after the core UI
-  client is usable.
+- Managed profiles install the pinned `tele-mess-core` PyPI package through `uv`
+  into app-specific, per-version directories.
+- The default workspace is
+  `~/Library/Application Support/tele-mess-core`; a fresh workspace collects
+  Telegram API credentials and creates a user-private `config.yml` without
+  replacing an existing configuration.
+- Launch the installed executable directly with
+  `run-local --workspace <absolute-path> --web`, preserving paths containing
+  spaces as one argument.
+- Wait for authenticated `/healthz` and API-manifest responses before reporting
+  Ready; process existence or a log line alone is not readiness.
+- Start, graceful Stop, update, status, captured output, profile-switch cleanup,
+  and app-termination cleanup actions.
+- Keep Custom Command as an explicit escape hatch for development and
+  nonstandard Core installations.
 
 ## Should Have
 
@@ -165,9 +175,10 @@ Give one operator a reliable Mac app to:
 - Client-side AI extraction, message-point validation, or summary generation.
 - Client-side Telegram delivery that bypasses the Core workflow.
 - Full local mirror of the archive database.
-- Remote installation or upgrade of `tele-mess-core`.
-- Changing Telegram API ID/hash from the Mac app unless the core API makes that
-  explicit.
+- Remote installation or upgrade of `tele-mess-core`, and background
+  LaunchAgent ownership of the managed local runtime.
+- Editing or replacing an existing Core `config.yml`; V1 only bootstraps a new
+  workspace when no configuration exists.
 
 ## Milestones
 
@@ -182,7 +193,8 @@ Give one operator a reliable Mac app to:
 6. Add Search, Participants, Cursors, Media, and Operation Events diagnostics.
 7. Add daily analysis progress, persisted summary records, message-point
    inspection, and delivery configuration.
-8. Add local core runner and log/status handling.
+8. Add managed PyPI and custom local Core runners, secure workspace bootstrap,
+   authenticated readiness, and process/log/status handling.
 
 ## Acceptance Criteria
 
@@ -197,4 +209,7 @@ Give one operator a reliable Mac app to:
   operation events without crashing on empty data.
 - Daily Summary distinguishes full, important, and point-derived artifacts, and
   Message Points can query and inspect validated persisted point records.
+- A local profile can securely bootstrap a new workspace, install and start the
+  pinned Core, become ready only after authenticated API validation, and stop
+  without overlapping a replacement process.
 - The app builds and launches through `./script/build_and_run.sh`.

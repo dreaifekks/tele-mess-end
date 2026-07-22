@@ -107,6 +107,11 @@ private struct ProfileMenu: View {
                 } label: {
                     Label(profile.name, systemImage: profile.id == model.profileStore.selectedProfileID ? "checkmark" : profile.kind.systemImage)
                 }
+                .disabled(profileSwitchingIsLocked && profile.id != model.profileStore.selectedProfileID)
+            }
+
+            if profileSwitchingIsLocked {
+                Label("Stop local Core before switching", systemImage: "lock.fill")
             }
 
             Divider()
@@ -118,6 +123,7 @@ private struct ProfileMenu: View {
             } label: {
                 Label("Add Remote Core", systemImage: "plus")
             }
+            .disabled(profileSwitchingIsLocked)
 
             Button {
                 model.addLocalProfile()
@@ -126,6 +132,7 @@ private struct ProfileMenu: View {
             } label: {
                 Label("Add Local Core", systemImage: "plus")
             }
+            .disabled(profileSwitchingIsLocked)
 
             Divider()
 
@@ -139,6 +146,10 @@ private struct ProfileMenu: View {
             ToolbarPillLabel(title: model.selectedProfile?.name ?? "Core")
         }
         .buttonStyle(.plain)
+    }
+
+    private var profileSwitchingIsLocked: Bool {
+        model.localRunner.isBusy || model.localRunner.isRunning
     }
 }
 

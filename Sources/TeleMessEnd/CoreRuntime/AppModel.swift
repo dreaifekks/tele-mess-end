@@ -39,8 +39,16 @@ private struct PartialMutationError: LocalizedError {
     }
 }
 
+private enum LocalCoreReadinessResult {
+    case ready
+    case failed(String)
+    case cancelled
+}
+
 private let recentMessageRefreshIntervalNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
 private let dailySummaryProgressRefreshIntervalNanoseconds: UInt64 = 10 * 1_000_000_000
+private let localCoreKeychainAuthorizationMessage =
+    "macOS Keychain rejected the credential operation. Choose Repair Keychain Access & Retry to reopen the default Keychain, then enter its password in the system dialog. No Core configuration has been kept."
 
 private enum TokenReadMode {
     case promptIfNeeded
@@ -154,6 +162,8 @@ final class AppModel {
     @ObservationIgnored private var messageRequestRevision: UInt64 = 0
     @ObservationIgnored private var dailySummaryRequestRevision: UInt64 = 0
     @ObservationIgnored private var compatibilityCheckedSessionRevision: UInt64?
+    @ObservationIgnored private var localCoreLifecycleRevision: UInt64 = 0
+    @ObservationIgnored private var lastCredentialSaveRequiresAuthorization = false
 
     var selectedSection: AppSection = .dashboard
     var settingsSection: SettingsSection = .core
@@ -177,6 +187,7 @@ final class AppModel {
     var statusMessage = "Ready"
     var lastError: String?
     var validationStatus: CoreValidationStatus = .unverified
+    private(set) var localCoreKeychainAuthorizationRequired = false
 
     var originSearch = ""
     var originAccountFilter = ""
@@ -266,6 +277,7 @@ final class AppModel {
             resolvedID = profileStore.profiles.first?.id
         }
         guard profileStore.selectedProfileID != resolvedID else { return }
+        supersedeLocalCoreLifecycleAndStopActiveOperation()
         profileStore.select(resolvedID)
         let profileSuffix = resolvedID.map { String($0.uuidString.suffix(8)) } ?? "none"
         runtimeLogger.info("Profile selected profileSuffix=\(profileSuffix)")
@@ -274,6 +286,7 @@ final class AppModel {
 
     @discardableResult
     func addRemoteProfile() -> CoreProfile {
+        supersedeLocalCoreLifecycleAndStopActiveOperation()
         let profile = profileStore.addRemoteProfile()
         runtimeLogger.info("Remote profile added profileSuffix=\(String(profile.id.uuidString.suffix(8)))")
         beginProfileSession()
@@ -282,6 +295,7 @@ final class AppModel {
 
     @discardableResult
     func addLocalProfile() -> CoreProfile {
+        supersedeLocalCoreLifecycleAndStopActiveOperation()
         let profile = profileStore.addLocalProfile()
         runtimeLogger.info("Local profile added profileSuffix=\(String(profile.id.uuidString.suffix(8)))")
         beginProfileSession()
@@ -375,9 +389,59 @@ final class AppModel {
             }
         }
         guard !Task.isCancelled else { return }
+        if let guidanceStatus = managedLocalCoreAutomaticRefreshGuidance {
+            statusMessage = guidanceStatus
+            return
+        }
         guard await ensureCompatibility(allowKeychainUI: allowKeychainUI),
               !Task.isCancelled else { return }
         await refreshCurrentSection(allowKeychainUI: allowKeychainUI)
+    }
+
+    /// Managed local profiles have an explicit install/configure/start lifecycle.
+    /// Treat the pre-start states as onboarding, rather than issuing an automatic
+    /// request that can only produce a confusing connection error. Explicit
+    /// validation and refresh actions remain available for advanced setups.
+    private var managedLocalCoreAutomaticRefreshGuidance: String? {
+        guard let profile = selectedProfile,
+              profile.kind == .local,
+              profile.localRuntimeMode == .managedPyPI else {
+            return nil
+        }
+        if let activeProfileID = localRunner.activeProfileID,
+           activeProfileID != profile.id {
+            return "Stop the other local Core before starting this profile"
+        }
+        if localRunner.activeProfileID == profile.id {
+            switch localRunner.phase {
+            case .installing:
+                return "Installing local Core"
+            case .starting:
+                return "Starting local Core"
+            case .stopping:
+                return "Stopping local Core"
+            case .running:
+                if localRunner.runningProfileID == profile.id, localRunner.isRunning {
+                    return nil
+                }
+            case .idle, .failed:
+                break
+            }
+        }
+        guard let runtime = try? ManagedLocalCoreRuntime(profile: profile) else {
+            return "Review local Core settings"
+        }
+        let workspace = runtime.workspaceStatus()
+        guard runtime.isInstalled else {
+            return "Install local Core to continue"
+        }
+        guard workspace.configurationExists else {
+            return "Configure local Core to continue"
+        }
+        guard workspace.configurationIsReadable else {
+            return "Fix the local Core configuration to continue"
+        }
+        return "Local Core is ready to start"
     }
 
     func runRecentMessageRefreshLoop() async {
@@ -405,7 +469,11 @@ final class AppModel {
         }
     }
 
-    func validateActiveProfile() async {
+    func validateActiveProfile(localCoreLifecycleRevision expectedLocalCoreRevision: UInt64? = nil) async {
+        if let expectedLocalCoreRevision,
+           expectedLocalCoreRevision != localCoreLifecycleRevision {
+            return
+        }
         guard validationStatus != .validating else { return }
         let validationRevision = sessionRevision
         validationStatus = .validating
@@ -413,26 +481,48 @@ final class AppModel {
             do {
                 try await Task.sleep(for: .milliseconds(50))
             } catch {
-                if validationRevision == sessionRevision, validationStatus == .validating {
+                if validationRevision == sessionRevision,
+                   expectedLocalCoreRevision.map({ $0 == localCoreLifecycleRevision }) ?? true,
+                   validationStatus == .validating {
                     validationStatus = .unverified
                 }
                 return
             }
         }
         guard validationRevision == sessionRevision else { return }
+        if let expectedLocalCoreRevision,
+           expectedLocalCoreRevision != localCoreLifecycleRevision {
+            return
+        }
         guard !Task.isCancelled else {
             validationStatus = .unverified
             return
         }
         let succeeded = await withLoading("Validating profile") { session in
             let messageRevision = beginMessageRequest()
-            _ = try await session.client.health()
-            let snapshot = try await fetchDashboardSnapshot(using: session.client)
-            try ensureCurrent(session)
-            applyDashboardSnapshot(snapshot, messageRevision: messageRevision)
-            compatibilityCheckedSessionRevision = validationRevision
-            validationStatus = .verified
-            statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
+            do {
+                _ = try await session.client.health()
+                let snapshot = try await fetchDashboardSnapshot(using: session.client)
+                try ensureCurrent(session)
+                if let expectedLocalCoreRevision,
+                   expectedLocalCoreRevision != localCoreLifecycleRevision {
+                    throw CancellationError()
+                }
+                applyDashboardSnapshot(snapshot, messageRevision: messageRevision)
+                compatibilityCheckedSessionRevision = validationRevision
+                validationStatus = .verified
+                statusMessage = "Connected to \(selectedProfile?.name ?? "core")"
+            } catch {
+                if let expectedLocalCoreRevision,
+                   expectedLocalCoreRevision != localCoreLifecycleRevision {
+                    throw CancellationError()
+                }
+                throw error
+            }
+        }
+        if let expectedLocalCoreRevision,
+           expectedLocalCoreRevision != localCoreLifecycleRevision {
+            return
         }
         if !succeeded, validationStatus == .validating {
             validationStatus = Task.isCancelled ? .unverified : .failed
@@ -1079,6 +1169,13 @@ final class AppModel {
             credentialAction = "unchanged"
         }
         runtimeLogger.info("Profile save begin profileSuffix=\(profileSuffix) credential=\(credentialAction)")
+        lastCredentialSaveRequiresAuthorization = false
+        if localRunner.activeProfileID == profile.id {
+            lastError = "Stop this local Core before changing its profile settings."
+            statusMessage = "Stop local Core first"
+            runtimeLogger.warning("Profile save blocked profileSuffix=\(profileSuffix) reason=local_core_active")
+            return false
+        }
         do {
             if let token {
                 if token.isEmpty {
@@ -1096,9 +1193,14 @@ final class AppModel {
             }
             statusMessage = "Profile saved"
             lastError = nil
+            lastCredentialSaveRequiresAuthorization = false
+            localCoreKeychainAuthorizationRequired = false
             runtimeLogger.info("Profile save end profileSuffix=\(profileSuffix) result=success")
             return true
         } catch {
+            lastCredentialSaveRequiresAuthorization =
+                (error as? KeychainError)?.requiresUserAuthorization == true
+            localCoreKeychainAuthorizationRequired = false
             lastError = error.localizedDescription
             statusMessage = "Failed"
             runtimeLogger.error("Profile save end profileSuffix=\(profileSuffix) result=failure error=\(safeRuntimeErrorSummary(error))")
@@ -1108,9 +1210,13 @@ final class AppModel {
 
     @discardableResult
     func deleteSelectedProfile() -> Bool {
+        let activeProfileID = localRunner.activeProfileID
         guard let removed = profileStore.deleteSelected() else { return false }
         let profileSuffix = String(removed.id.uuidString.suffix(8))
         runtimeLogger.info("Profile delete begin profileSuffix=\(profileSuffix)")
+        if activeProfileID == removed.id {
+            supersedeLocalCoreLifecycleAndStopActiveOperation()
+        }
         beginProfileSession()
         summarySettingsStore.removeProfile(removed.id)
         do {
@@ -1132,13 +1238,245 @@ final class AppModel {
         NSWorkspace.shared.open(url)
     }
 
-    func startLocalCore() {
-        guard let profile = selectedProfile else { return }
-        localRunner.start(profile: profile)
+    @discardableResult
+    func installLocalCore(force: Bool = false) async -> Bool {
+        guard let profile = selectedProfile, profile.kind == .local else {
+            lastError = "Select a local Core profile first."
+            statusMessage = "Failed"
+            return false
+        }
+        guard profile.localRuntimeMode == .managedPyPI else {
+            lastError = "Custom command profiles do not use the managed Core installer."
+            statusMessage = "Failed"
+            return false
+        }
+
+        localCoreLifecycleRevision &+= 1
+        let lifecycleRevision = localCoreLifecycleRevision
+        lastError = nil
+        statusMessage = force ? "Updating local Core" : "Installing local Core"
+        let succeeded = await localRunner.install(profile: profile, force: force)
+        guard lifecycleRevision == localCoreLifecycleRevision else { return false }
+        guard selectedProfile?.id == profile.id else { return false }
+        if succeeded {
+            statusMessage = "Installed Core \(profile.localCoreVersion)"
+        } else {
+            lastError = localRunner.lastError ?? "The local Core installation failed."
+            statusMessage = "Failed"
+        }
+        return succeeded
     }
 
-    func stopLocalCore() {
-        localRunner.stop()
+    @discardableResult
+    func bootstrapLocalCore(
+        _ configuration: LocalCoreBootstrapConfiguration,
+        repairingKeychainAccess: Bool = false
+    ) -> Bool {
+        guard var profile = selectedProfile, profile.kind == .local else {
+            lastError = "Select a local Core profile first."
+            statusMessage = "Failed"
+            return false
+        }
+        guard profile.localRuntimeMode == .managedPyPI else {
+            lastError = "Workspace setup is available for managed PyPI profiles."
+            statusMessage = "Failed"
+            return false
+        }
+        guard let baseURL = profile.baseURL,
+              baseURL.scheme?.lowercased() == "http",
+              baseURL.host == "127.0.0.1",
+              (baseURL.port ?? 80) == 8765,
+              baseURL.user == nil,
+              baseURL.password == nil,
+              baseURL.query == nil,
+              baseURL.fragment == nil,
+              baseURL.path.isEmpty || baseURL.path == "/" else {
+            lastError = "First-time setup requires the local Base URL http://127.0.0.1:8765."
+            statusMessage = "Failed"
+            return false
+        }
+
+        let profileSuffix = String(profile.id.uuidString.suffix(8))
+        runtimeLogger.info("Local core bootstrap begin profileSuffix=\(profileSuffix)")
+        do {
+            // This user-initiated operation explicitly unlocks the default
+            // Keychain before config.yml and its matching token are generated.
+            // A plain SecItem read cannot prompt when the item does not exist.
+            try keychain.requestAuthorization(
+                profileID: profile.id,
+                forceResetDefaultKeychain: repairingKeychainAccess
+            )
+            localCoreKeychainAuthorizationRequired = false
+        } catch {
+            localCoreKeychainAuthorizationRequired = (error as? KeychainError)?.requiresUserAuthorization == true
+            lastError = localCoreKeychainAuthorizationRequired
+                ? localCoreKeychainAuthorizationMessage
+                : error.localizedDescription
+            statusMessage = localCoreKeychainAuthorizationRequired
+                ? "Keychain authorization required"
+                : "Failed"
+            runtimeLogger.warning(
+                "Local core bootstrap blocked profileSuffix=\(profileSuffix) reason=credential_authorization_failed error=\(safeRuntimeErrorSummary(error))"
+            )
+            return false
+        }
+        do {
+            let runtime = try ManagedLocalCoreRuntime(profile: profile)
+            let result = try runtime.bootstrapConfiguration(configuration)
+            // The generated Core config requires its private server token.
+            // Keep the matching client profile on the canonical auth mode.
+            profile.authMode = .bearer
+            guard saveProfile(profile, token: result.serverToken) else {
+                try? FileManager.default.removeItem(at: result.configurationFileURL)
+                localCoreKeychainAuthorizationRequired = lastCredentialSaveRequiresAuthorization
+                if lastCredentialSaveRequiresAuthorization {
+                    lastError = localCoreKeychainAuthorizationMessage
+                    statusMessage = "Keychain authorization required"
+                }
+                runtimeLogger.warning("Local core bootstrap rolled back profileSuffix=\(profileSuffix) reason=credential_save_failed")
+                return false
+            }
+            statusMessage = "Local Core workspace created"
+            lastError = nil
+            runtimeLogger.info("Local core bootstrap end profileSuffix=\(profileSuffix) result=success")
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "Failed"
+            runtimeLogger.error("Local core bootstrap end profileSuffix=\(profileSuffix) result=failure error=\(safeRuntimeErrorSummary(error))")
+            return false
+        }
+    }
+
+    func openLocalCoreWorkspace(_ profileOverride: CoreProfile? = nil) {
+        guard let profile = profileOverride ?? selectedProfile,
+              profile.kind == .local else { return }
+        do {
+            let runtime = try ManagedLocalCoreRuntime(profile: profile)
+            let status = runtime.workspaceStatus()
+            guard status.workspaceExists else {
+                lastError = "Create the local Core workspace configuration first."
+                statusMessage = "Failed"
+                return
+            }
+            NSWorkspace.shared.open(status.workspaceDirectory)
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "Failed"
+        }
+    }
+
+    @discardableResult
+    func startLocalCore() async -> Bool {
+        guard let profile = selectedProfile, profile.kind == .local else {
+            lastError = "Select a local Core profile first."
+            statusMessage = "Failed"
+            return false
+        }
+        let profileID = profile.id
+        localCoreLifecycleRevision &+= 1
+        let lifecycleRevision = localCoreLifecycleRevision
+        lastError = nil
+        validationStatus = .validating
+        statusMessage = "Starting local Core"
+
+        let processStarted = await localRunner.start(profile: profile)
+        guard lifecycleRevision == localCoreLifecycleRevision else {
+            return false
+        }
+        guard processStarted else {
+            guard selectedProfile?.id == profileID else { return false }
+            validationStatus = .failed
+            lastError = localRunner.lastError ?? "The local Core could not be started."
+            statusMessage = "Failed"
+            return false
+        }
+
+        let readinessResult = await waitForLocalCoreReadiness(
+            profileID: profileID,
+            lifecycleRevision: lifecycleRevision
+        )
+        guard lifecycleRevision == localCoreLifecycleRevision else {
+            // A newer start/stop/profile operation owns the runner now. The
+            // superseded task must not stop or mark that newer process.
+            return false
+        }
+        guard selectedProfile?.id == profileID else {
+            return false
+        }
+        switch readinessResult {
+        case .ready:
+            guard localRunner.markReady(profileID: profileID) else {
+                validationStatus = .failed
+                lastError = "The local Core exited before readiness could be confirmed."
+                statusMessage = "Failed"
+                return false
+            }
+            validationStatus = .unverified
+            statusMessage = "Local Core is ready"
+            await validateActiveProfile(localCoreLifecycleRevision: lifecycleRevision)
+            guard lifecycleRevision == localCoreLifecycleRevision,
+                  localRunner.runningProfileID == profileID,
+                  localRunner.phase == .running else {
+                return false
+            }
+            return validationStatus == .verified
+        case .failed(let message):
+            let operationID = localRunner.activeOperationID
+            _ = localRunner.markReadinessFailed(profileID: profileID, message: message)
+            if let operationID {
+                _ = await localRunner.stop(ifOwnedByOperationID: operationID)
+            }
+            guard lifecycleRevision == localCoreLifecycleRevision,
+                  selectedProfile?.id == profileID else {
+                return false
+            }
+            validationStatus = .failed
+            lastError = message
+            statusMessage = "Failed"
+            return false
+        case .cancelled:
+            let operationID = localRunner.activeOperationID
+            if let operationID {
+                _ = await localRunner.stop(ifOwnedByOperationID: operationID)
+            }
+            guard lifecycleRevision == localCoreLifecycleRevision,
+                  selectedProfile?.id == profileID else {
+                return false
+            }
+            validationStatus = .unverified
+            return false
+        }
+    }
+
+    func stopLocalCore() async {
+        localCoreLifecycleRevision &+= 1
+        let lifecycleRevision = localCoreLifecycleRevision
+        let operationID = localRunner.activeOperationID
+        if let operationID {
+            _ = await localRunner.stop(ifOwnedByOperationID: operationID)
+        }
+        guard lifecycleRevision == localCoreLifecycleRevision else { return }
+        if localRunner.lastError == nil {
+            // Drop data loaded from the process that just stopped. Keeping the
+            // old dashboard visible would make the Core look connected and
+            // hide the Start guidance until a later failed refresh.
+            beginProfileSession()
+            statusMessage = "Local Core stopped"
+        } else {
+            validationStatus = .unverified
+        }
+    }
+
+    func shutdownLocalCore() {
+        localCoreLifecycleRevision &+= 1
+        localRunner.shutdown()
+    }
+
+    private func supersedeLocalCoreLifecycleAndStopActiveOperation() {
+        localCoreLifecycleRevision &+= 1
+        guard let operationID = localRunner.activeOperationID else { return }
+        Task { await localRunner.stop(ifOwnedByOperationID: operationID) }
     }
 
     private func beginProfileSession() {
@@ -1147,6 +1485,8 @@ final class AppModel {
         dailySummaryRequestRevision &+= 1
         compatibilityCheckedSessionRevision = nil
         tokenCache = nil
+        lastCredentialSaveRequiresAuthorization = false
+        localCoreKeychainAuthorizationRequired = false
         activeOperations.removeAll()
         latestOperationIDs.removeAll()
         summarySettingsStore.selectProfile(selectedProfile?.id)
@@ -1192,7 +1532,10 @@ final class AppModel {
         includeDeletedDailySummaryRecords = false
     }
 
-    private func makeSession(tokenReadMode: TokenReadMode = .promptIfNeeded) throws -> CoreSessionContext {
+    private func makeSession(
+        tokenReadMode: TokenReadMode = .promptIfNeeded,
+        requestTimeoutInterval: TimeInterval? = nil
+    ) throws -> CoreSessionContext {
         guard let profile = selectedProfile else {
             throw CoreAPIError.missingProfile
         }
@@ -1208,9 +1551,117 @@ final class AppModel {
                 tokenProvider: FixedTokenProvider(value: token),
                 authMode: profile.authMode,
                 transport: transport,
-                logger: apiLogger
+                logger: apiLogger,
+                requestTimeoutInterval: requestTimeoutInterval
             )
         )
+    }
+
+    private func waitForLocalCoreReadiness(
+        profileID: UUID,
+        lifecycleRevision: UInt64
+    ) async -> LocalCoreReadinessResult {
+        // Installation and the initial SQLite migration complete before the
+        // HTTP listener becomes available. Poll the authenticated contract
+        // instead of inferring readiness from process output. Both the total
+        // deadline and each request are bounded so a socket that accepts but
+        // never responds cannot strand Start indefinitely.
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(60))
+        while clock.now < deadline {
+            guard !Task.isCancelled else { return .cancelled }
+            guard lifecycleRevision == localCoreLifecycleRevision else { return .cancelled }
+            guard selectedProfile?.id == profileID else { return .cancelled }
+            guard localRunner.runningProfileID == profileID,
+                  localRunner.isRunning else {
+                return .failed(localRunner.lastError ?? "The local Core exited before it became ready.")
+            }
+
+            do {
+                guard let requestTimeout = localCoreReadinessRequestTimeout(
+                    clock: clock,
+                    deadline: deadline
+                ) else {
+                    break
+                }
+                let session = try makeSession(
+                    tokenReadMode: .promptIfNeeded,
+                    requestTimeoutInterval: requestTimeout
+                )
+                var boundedSession = session
+                let health = try await boundedSession.client.health()
+                guard lifecycleRevision == localCoreLifecycleRevision else { return .cancelled }
+                guard health.ok != false else {
+                    let remaining = clock.now.duration(to: deadline)
+                    guard remaining > .zero else { break }
+                    try await Task.sleep(
+                        for: remaining < .milliseconds(500) ? remaining : .milliseconds(500)
+                    )
+                    continue
+                }
+                guard let manifestTimeout = localCoreReadinessRequestTimeout(
+                    clock: clock,
+                    deadline: deadline
+                ) else {
+                    break
+                }
+                boundedSession.client.requestTimeoutInterval = manifestTimeout
+                _ = try await boundedSession.client.fetchAPIManifest()
+                guard lifecycleRevision == localCoreLifecycleRevision else { return .cancelled }
+                try ensureCurrent(boundedSession)
+                return .ready
+            } catch is CancellationError {
+                return .cancelled
+            } catch let error as KeychainError {
+                return .failed(error.localizedDescription)
+            } catch let error as CoreAPIError {
+                switch error {
+                case .missingToken:
+                    return .failed(
+                        "This local profile has no API token. Enter the token from server.token, or create a new workspace from Local Runtime settings."
+                    )
+                case .invalidBaseURL:
+                    return .failed(error.localizedDescription)
+                case .httpStatus(401, _):
+                    return .failed(
+                        "The local Core rejected the saved API token. Make sure the profile token matches server.token in config.yml."
+                    )
+                case .httpStatus(let status, _) where (400..<500).contains(status):
+                    return .failed("The local Core readiness check failed with HTTP status \(status).")
+                case .invalidResponse, .httpStatus, .transport, .missingProfile:
+                    break
+                }
+            } catch {
+                // Connection-refused and other startup races are expected
+                // until the HTTP listener is bound. The final message remains
+                // intentionally generic so request details never enter logs.
+            }
+
+            do {
+                let remaining = clock.now.duration(to: deadline)
+                guard remaining > .zero else { break }
+                try await Task.sleep(
+                    for: remaining < .milliseconds(500) ? remaining : .milliseconds(500)
+                )
+            } catch {
+                return .cancelled
+            }
+        }
+        return .failed(
+            "The local Core did not become ready within 60 seconds. Check Core Process logs, the workspace config, and whether port 8765 is already in use."
+        )
+    }
+
+    private func localCoreReadinessRequestTimeout(
+        clock: ContinuousClock,
+        deadline: ContinuousClock.Instant
+    ) -> TimeInterval? {
+        let remaining = clock.now.duration(to: deadline)
+        guard remaining > .zero else { return nil }
+        let components = remaining.components
+        let seconds = Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        return min(2, seconds)
     }
 
     private func token(for profile: CoreProfile, tokenReadMode: TokenReadMode) throws -> String? {

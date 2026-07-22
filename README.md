@@ -32,11 +32,28 @@ V1 surfaces:
 The app supports multiple saved core profiles:
 
 - Remote core: base URL plus API token.
-- Local core: executable/path configuration plus API token, with start/stop/status
-  owned by the Mac app.
+- Managed local core: a pinned `tele-mess-core` PyPI version, workspace, API
+  token, and process lifecycle owned by the Mac app.
+- Custom local core: an explicit shell command and optional working directory for
+  development or nonstandard installations.
 
-Tokens are treated as secrets and stored in Keychain. Non-secret profile metadata
-can be stored in app preferences.
+The managed runtime uses `uv tool install` against an explicit public-PyPI
+default index, with source-changing `UV_*`/`PIP_*` environment overrides
+filtered and app-specific tool, bin, and cache directories under
+`~/Library/Application Support/TeleMessEnd/CoreRuntime`; it does not depend on
+an incidental `uvx` cache or the GUI app's shell startup files. The default Core workspace is
+`~/Library/Application Support/tele-mess-core`. A fresh workspace collects the
+Telegram API ID/hash, creates `config.yml` without overwriting an existing file,
+and restricts it to the current user. The generated Core API token is written to
+that Core-owned config and the profile copy is stored in Keychain; secrets never
+enter app preferences or runtime logs.
+
+Managed Core `0.3.0` starts as the structured command
+`tele-mess-core run-local --workspace <absolute-path> --web`. The app waits for
+an authenticated `/healthz` response and the API manifest before marking the
+process ready. Stop, profile switching, and app termination signal the process;
+normal Start/Stop actions wait for the previous process to exit before another
+one can launch.
 
 Selecting a different profile starts a new Core session. Core-derived data and
 feature selections are cleared, in-flight results from the old profile are
@@ -105,8 +122,10 @@ Run the complete local verification gate used by CI and releases:
 ```
 
 It builds the package and runs the mocked Core API contract suite, summary
-settings/DTO tests, profile-session runtime regressions, Markdown parser tests,
-and the SwiftPM test build. The executable suites are intentionally independent
+settings/DTO tests, profile-session and local-Core lifecycle regressions,
+Markdown parser tests, and the SwiftPM test build. Local runtime tests use
+temporary workspaces and fake commands; they do not install from PyPI or touch
+the user's Core workspace. The executable suites are intentionally independent
 of XCTest because the supported CommandLineTools environment does not provide a
 usable XCTest or Swift Testing module.
 

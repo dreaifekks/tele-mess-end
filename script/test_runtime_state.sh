@@ -18,6 +18,7 @@ swiftc \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/AppSection.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/CoreProfile.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/CoreProfileStore.swift" \
+  "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/LocalCoreRuntimeSupport.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/LocalCoreProcessController.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/OriginFilters.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/SummarySettings.swift" \

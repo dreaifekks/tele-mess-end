@@ -63,7 +63,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the selected local app profile and its stored token. It does not change the core service.")
+            Text("This removes the selected app profile and its stored token. If this app owns a local Core process for the profile, that process is stopped. Its workspace and Core data are not deleted.")
         }
     }
 
@@ -87,37 +87,65 @@ struct SettingsView: View {
             }
             .listStyle(.sidebar)
             .frame(minWidth: 220, idealWidth: 250, maxWidth: 300)
+            .disabled(model.localRunner.isBusy || model.localRunner.isRunning)
+            .help(
+                model.localRunner.isBusy || model.localRunner.isRunning
+                    ? "Stop the active local Core before switching profiles."
+                    : "Select a Core profile."
+            )
 
             Form {
+                if draft.kind == .local {
+                    LocalCoreSettingsSection(
+                        model: model,
+                        draft: $draft,
+                        saveDraft: saveDraft
+                    )
+                    .id(draft.id)
+                }
+
                 Section("Connection") {
-                    TextField("Name", text: $draft.name)
-                    Picker("Mode", selection: $draft.kind) {
-                        ForEach(CoreProfileKind.allCases) { kind in
-                            Text(kind.title).tag(kind)
-                        }
+                    if profileEditingIsLocked {
+                        Label(
+                            "Stop this local Core before changing its connection or credential settings.",
+                            systemImage: "lock.fill"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.segmented)
-                    TextField("Base URL", text: $draft.baseURLString)
-                    Picker("Auth", selection: $draft.authMode) {
-                        ForEach(CoreAuthMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    HStack {
-                        SecureField("New API token", text: Binding(
-                            get: { token },
-                            set: { value in
-                                token = value
-                                tokenWasEdited = true
+
+                    Group {
+                        TextField("Name", text: $draft.name)
+                        Picker("Mode", selection: $draft.kind) {
+                            ForEach(CoreProfileKind.allCases) { kind in
+                                Text(kind.title).tag(kind)
                             }
-                        ))
-                        Button {
-                            token = ""
-                            tokenWasEdited = true
-                        } label: {
-                            Label("Clear Token", systemImage: "key.slash")
+                        }
+                        .pickerStyle(.segmented)
+                        TextField("Base URL", text: $draft.baseURLString)
+                        Picker("Auth", selection: $draft.authMode) {
+                            ForEach(CoreAuthMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        HStack {
+                            SecureField("New API token", text: Binding(
+                                get: { token },
+                                set: { value in
+                                    token = value
+                                    tokenWasEdited = true
+                                }
+                            ))
+                            Button {
+                                token = ""
+                                tokenWasEdited = true
+                            } label: {
+                                Label("Clear Token", systemImage: "key.slash")
+                            }
                         }
                     }
+                    .disabled(profileEditingIsLocked)
+
                     if let error = model.lastError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
@@ -127,33 +155,6 @@ struct SettingsView: View {
                         Label(model.statusMessage, systemImage: "checkmark.circle")
                             .foregroundStyle(.secondary)
                             .font(.callout)
-                    }
-                }
-
-                if draft.kind == .local {
-                    Section("Local Runtime") {
-                        TextField("Command", text: $draft.localCommand)
-                        TextField("Working directory", text: $draft.localWorkingDirectory)
-                        HStack {
-                            Button {
-                                if saveDraft() {
-                                    model.startLocalCore()
-                                }
-                            } label: {
-                                Label("Start", systemImage: "play")
-                            }
-                            Button {
-                                model.stopLocalCore()
-                            } label: {
-                                Label("Stop", systemImage: "stop")
-                            }
-                            .disabled(!model.localRunner.isRunning)
-                            StatusBadge(text: model.localRunner.isRunning ? "Running" : "Stopped", kind: model.localRunner.isRunning ? .success : .neutral)
-                        }
-                        if let error = model.localRunner.lastError {
-                            Text(error)
-                                .foregroundStyle(.red)
-                        }
                     }
                 }
 
@@ -204,6 +205,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .disabled(model.localRunner.isBusy || model.localRunner.isRunning)
             }
             .formStyle(.grouped)
             .controlSize(.large)
@@ -212,6 +214,14 @@ struct SettingsView: View {
             .padding(.leading, 18)
         }
             .frame(maxHeight: .infinity)
+    }
+
+    private var profileEditingIsLocked: Bool {
+        guard draft.kind == .local,
+              model.localRunner.activeProfileID == draft.id else {
+            return false
+        }
+        return model.localRunner.isBusy || model.localRunner.isRunning
     }
 
     private var summarySettings: some View {

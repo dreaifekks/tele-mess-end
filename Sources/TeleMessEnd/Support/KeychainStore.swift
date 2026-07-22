@@ -4,9 +4,16 @@ import Security
 
 protocol CredentialStore: Sendable {
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String?
+    func requestAuthorization(profileID: UUID, forceResetDefaultKeychain: Bool) throws
     func saveToken(_ token: String, profileID: UUID) throws
     func clearToken(profileID: UUID) throws
     func deleteToken(profileID: UUID) throws
+}
+
+extension CredentialStore {
+    func requestAuthorization(profileID: UUID, forceResetDefaultKeychain: Bool) throws {
+        _ = try readToken(profileID: profileID, allowAuthenticationUI: true)
+    }
 }
 
 protocol KeychainItemBackend: Sendable {
@@ -18,6 +25,35 @@ protocol KeychainItemBackend: Sendable {
 protocol CredentialNamespaceStore: Sendable {
     func service(profileID: UUID) -> String?
     func selectService(_ service: String?, profileID: UUID)
+}
+
+protocol DefaultKeychainAuthorizer: Sendable {
+    func requestUnlock(forceReset: Bool) throws
+}
+
+struct SystemDefaultKeychainAuthorizer: DefaultKeychainAuthorizer, Sendable {
+    // SecItem APIs still store generic-password items in the legacy default
+    // Keychain on macOS. When that Keychain is locked, SecItemAdd can return
+    // errSecAuthFailed without presenting UI. This legacy API is the system's
+    // remaining way to explicitly present the Unlock Keychain dialog.
+    @available(macOS, deprecated: 10.10, message: "Required to unlock the legacy default macOS Keychain")
+    func requestUnlock(forceReset: Bool) throws {
+        var defaultKeychain: SecKeychain?
+        let copyStatus = SecKeychainCopyDefault(&defaultKeychain)
+        guard copyStatus == errSecSuccess, let defaultKeychain else {
+            throw KeychainError(status: copyStatus)
+        }
+        if forceReset {
+            let lockStatus = SecKeychainLock(defaultKeychain)
+            guard lockStatus == errSecSuccess else {
+                throw KeychainError(status: lockStatus)
+            }
+        }
+        let unlockStatus = SecKeychainUnlock(defaultKeychain, 0, nil, false)
+        guard unlockStatus == errSecSuccess else {
+            throw KeychainError(status: unlockStatus)
+        }
+    }
 }
 
 final class UserDefaultsCredentialNamespaceStore: CredentialNamespaceStore, @unchecked Sendable {
@@ -56,21 +92,25 @@ struct KeychainStore: CredentialStore, Sendable {
     private let managedServicePrefix = "com.dreaifekks.TeleMessEnd.coreToken.managed"
     private let backend: any KeychainItemBackend
     private let namespaceStore: any CredentialNamespaceStore
+    private let defaultKeychainAuthorizer: any DefaultKeychainAuthorizer
     private let logger: AppRuntimeLogger
 
     init() {
         backend = SystemKeychainItemBackend()
         namespaceStore = UserDefaultsCredentialNamespaceStore()
+        defaultKeychainAuthorizer = SystemDefaultKeychainAuthorizer()
         logger = AppLog.runtime
     }
 
     init(
         backend: any KeychainItemBackend,
         namespaceStore: any CredentialNamespaceStore,
+        defaultKeychainAuthorizer: any DefaultKeychainAuthorizer = SystemDefaultKeychainAuthorizer(),
         logger: AppRuntimeLogger = AppLog.runtime
     ) {
         self.backend = backend
         self.namespaceStore = namespaceStore
+        self.defaultKeychainAuthorizer = defaultKeychainAuthorizer
         self.logger = logger
     }
 
@@ -101,6 +141,23 @@ struct KeychainStore: CredentialStore, Sendable {
             logger.warning("Legacy Keychain migration deferred profileSuffix=\(suffix)")
         }
         return legacyToken.isEmpty ? nil : legacyToken
+    }
+
+    func requestAuthorization(profileID: UUID, forceResetDefaultKeychain: Bool) throws {
+        let profileSuffix = String(profileID.uuidString.suffix(8))
+        logger.info(
+            "Default Keychain unlock begin profileSuffix=\(profileSuffix) forceReset=\(forceResetDefaultKeychain)"
+        )
+        do {
+            try defaultKeychainAuthorizer.requestUnlock(forceReset: forceResetDefaultKeychain)
+            logger.info("Default Keychain unlock end profileSuffix=\(profileSuffix) result=success")
+        } catch {
+            logger.warning(
+                "Default Keychain unlock end profileSuffix=\(profileSuffix) result=failure error=\(safeKeychainErrorSummary(error))"
+            )
+            throw error
+        }
+        _ = try readToken(profileID: profileID, allowAuthenticationUI: true)
     }
 
     func saveToken(_ token: String, profileID: UUID) throws {
@@ -176,12 +233,10 @@ struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
         var query = matchQuery(service: service, profileID: profileID)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        if !allowAuthenticationUI {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-            query[kSecUseAuthenticationUI as String] = "u_AuthUIF"
-        }
+        let context = LAContext()
+        context.localizedReason = "TeleMessEnd needs access to the saved Core token."
+        context.interactionNotAllowed = !allowAuthenticationUI
+        query[kSecUseAuthenticationContext as String] = context
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -204,6 +259,9 @@ struct SystemKeychainItemBackend: KeychainItemBackend, Sendable {
         logger.info("Keychain save begin profileSuffix=\(profileSuffix)")
         let data = Data(value.utf8)
         var query = matchQuery(service: service, profileID: profileID)
+        let context = LAContext()
+        context.localizedReason = "TeleMessEnd needs permission to save the Core token."
+        query[kSecUseAuthenticationContext as String] = context
         let attributes: [String: Any] = [
             kSecValueData as String: data
         ]
@@ -259,6 +317,12 @@ struct KeychainError: LocalizedError, Equatable {
 
     var isAuthenticationFailure: Bool {
         status == errSecAuthFailed
+    }
+
+    var requiresUserAuthorization: Bool {
+        status == errSecAuthFailed
+            || status == errSecInteractionNotAllowed
+            || status == errSecUserCanceled
     }
 
     var errorDescription: String? {

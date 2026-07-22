@@ -20,19 +20,22 @@ struct CoreAPIClient: Sendable {
     var authMode: CoreAuthMode
     var transport: any CoreHTTPTransport
     var logger: AppRuntimeLogger
+    var requestTimeoutInterval: TimeInterval?
 
     init(
         baseURL: URL,
         tokenProvider: any AuthTokenProvider = EmptyTokenProvider(),
         authMode: CoreAuthMode = .bearer,
         transport: any CoreHTTPTransport = URLSession.shared,
-        logger: AppRuntimeLogger = AppLog.api
+        logger: AppRuntimeLogger = AppLog.api,
+        requestTimeoutInterval: TimeInterval? = nil
     ) {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
         self.authMode = authMode
         self.transport = transport
         self.logger = logger
+        self.requestTimeoutInterval = requestTimeoutInterval
     }
 
     func health() async throws -> CoreState {
@@ -717,6 +720,9 @@ struct CoreAPIClient: Sendable {
 
     private func makeRequest(_ method: String, path: String, query: [URLQueryItem], accept: String = "application/json") throws -> URLRequest {
         var request = URLRequest(url: try makeURL(path: path, query: query))
+        if let requestTimeoutInterval {
+            request.timeoutInterval = requestTimeoutInterval
+        }
         request.httpMethod = method
         request.setValue(accept, forHTTPHeaderField: "Accept")
         if let token = try tokenProvider.token(), !token.isEmpty {

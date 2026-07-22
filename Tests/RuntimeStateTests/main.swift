@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -10,6 +11,66 @@ enum RuntimeStateTests {
         }
         await runner.run("profile selection resolves nil and invalid IDs") {
             try profileSelectionAlwaysResolves()
+        }
+        await runner.run("legacy profiles preserve fields and migrate local runtime modes") {
+            try legacyProfilesPreserveFieldsAndMigrateRuntimeModes()
+        }
+        await runner.run("managed local runtime builds pinned paths and web command") {
+            try managedRuntimeBuildsPinnedPathsAndWebCommand()
+        }
+        await runner.run("managed local runtime locates uv without shell startup") {
+            try managedRuntimeLocatesUVWithoutShellStartup()
+        }
+        await runner.run("managed installation marker invalidates before repair") {
+            try managedInstallationMarkerInvalidatesBeforeRepair()
+        }
+        await runner.run("managed local bootstrap is private and non-destructive") {
+            try managedBootstrapIsPrivateAndNonDestructive()
+        }
+        await runner.run("managed bootstrap normalizes the local profile to bearer auth") {
+            try await managedBootstrapNormalizesBearerAuth()
+        }
+        await runner.run("managed bootstrap requests Keychain authorization before writing config") {
+            try await managedBootstrapRequestsKeychainAuthorizationBeforeWriting()
+        }
+        await runner.run("managed bootstrap rolls back when Keychain save needs authorization") {
+            try await managedBootstrapRollsBackWhenKeychainSaveNeedsAuthorization()
+        }
+        await runner.run("managed bootstrap repairs Keychain access on explicit retry") {
+            try await managedBootstrapRepairsKeychainAccessOnExplicitRetry()
+        }
+        await runner.run("automatic refresh waits for managed local setup") {
+            try await automaticRefreshWaitsForManagedLocalSetup()
+        }
+        await runner.run("custom local Core follows awaited lifecycle") {
+            try await customLocalCoreFollowsAwaitedLifecycle()
+        }
+        await runner.run("custom local Core reports an early exit") {
+            try await customLocalCoreReportsEarlyExit()
+        }
+        await runner.run("early-exit cleanup reaps the owned process group") {
+            try await earlyExitCleanupReapsOwnedProcessGroup()
+        }
+        await runner.run("synchronous shutdown crosses the process-group barrier") {
+            try await synchronousShutdownCrossesProcessGroupBarrier()
+        }
+        await runner.run("stale operation ownership cannot stop a newer Core") {
+            try await staleOperationOwnershipCannotStopNewerCore()
+        }
+        await runner.run("overlapping same-profile waiters preserve the replacement owner") {
+            try await overlappingSameProfileWaitersPreserveReplacementOwner()
+        }
+        await runner.run("AppModel marks a custom local Core ready from the authenticated API") {
+            try await appModelMarksCustomLocalCoreReadyFromAuthenticatedAPI()
+        }
+        await runner.run("saving a running local profile requires an explicit stop") {
+            try await savingRunningLocalProfileRequiresStop()
+        }
+        await runner.run("superseded AppModel start cannot stop the newer Core") {
+            try await supersededAppModelStartCannotStopNewerCore()
+        }
+        await runner.run("stopping during validation cannot restore stale verified state") {
+            try await stoppingDuringValidationCannotRestoreStaleState()
         }
         await runner.run("delivery fallback distinguishes omitted and null") {
             try deliveryFallbackUsesFieldPresence()
@@ -31,6 +92,9 @@ enum RuntimeStateTests {
         }
         await runner.run("inaccessible managed token rotates on save") {
             try inaccessibleManagedTokenRotatesOnSave()
+        }
+        await runner.run("Keychain authorization unlocks before reading credentials") {
+            try keychainAuthorizationUnlocksBeforeReadingCredentials()
         }
         await runner.run("managed clear masks a legacy token") {
             try managedClearMasksLegacyToken()
@@ -118,6 +182,822 @@ enum RuntimeStateTests {
         try expectEqual(store.selectedProfileID, firstID)
         store.select(UUID())
         try expectEqual(store.selectedProfileID, firstID)
+    }
+
+    private static func legacyProfilesPreserveFieldsAndMigrateRuntimeModes() throws {
+        let remoteID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+        let customLocalID = UUID(uuidString: "20000000-0000-0000-0000-000000000002")!
+        let managedLocalID = UUID(uuidString: "30000000-0000-0000-0000-000000000003")!
+        let relativeManagedLocalID = UUID(uuidString: "40000000-0000-0000-0000-000000000004")!
+        let legacyJSON =
+            """
+            [
+              {
+                "id": "\(remoteID.uuidString)",
+                "name": "Existing Remote",
+                "kind": "remote",
+                "baseURLString": "https://core.example.test:8765",
+                "authMode": "apiToken",
+                "localCommand": "",
+                "localWorkingDirectory": "",
+                "createdAt": 100,
+                "updatedAt": 200
+              },
+              {
+                "id": "\(customLocalID.uuidString)",
+                "name": "Existing Custom Local",
+                "kind": "local",
+                "baseURLString": "http://127.0.0.1:9876",
+                "authMode": "bearer",
+                "localCommand": "python3 -m tele_mess_core serve-custom",
+                "localWorkingDirectory": "/tmp/custom-core",
+                "createdAt": 300,
+                "updatedAt": 400
+              },
+              {
+                "id": "\(managedLocalID.uuidString)",
+                "name": "Existing Managed Local",
+                "kind": "local",
+                "baseURLString": "http://127.0.0.1:8765",
+                "authMode": "bearer",
+                "localCommand": "tele-mess-core run-server --config config.yml",
+                "localWorkingDirectory": "/tmp/existing core workspace",
+                "createdAt": 500,
+                "updatedAt": 600
+              },
+              {
+                "id": "\(relativeManagedLocalID.uuidString)",
+                "name": "Relative Managed Local",
+                "kind": "local",
+                "baseURLString": "http://127.0.0.1:8765",
+                "authMode": "bearer",
+                "localCommand": "tele-mess-core run-server --config config.yml",
+                "localWorkingDirectory": "relative-core-workspace",
+                "createdAt": 700,
+                "updatedAt": 800
+              }
+            ]
+            """
+
+        let profiles = try JSONDecoder().decode([CoreProfile].self, from: Data(legacyJSON.utf8))
+        try expectEqual(profiles.count, 4)
+
+        let remote = profiles[0]
+        try expectEqual(remote.id, remoteID)
+        try expectEqual(remote.name, "Existing Remote")
+        try expectEqual(remote.kind, .remote)
+        try expectEqual(remote.baseURLString, "https://core.example.test:8765")
+        try expectEqual(remote.authMode, .apiToken)
+        try expectEqual(remote.createdAt, Date(timeIntervalSinceReferenceDate: 100))
+        try expectEqual(remote.updatedAt, Date(timeIntervalSinceReferenceDate: 200))
+
+        let customLocal = profiles[1]
+        try expectEqual(customLocal.id, customLocalID)
+        try expectEqual(customLocal.localRuntimeMode, .customCommand)
+        try expectEqual(customLocal.localCommand, "python3 -m tele_mess_core serve-custom")
+        try expectEqual(customLocal.localWorkingDirectory, "/tmp/custom-core")
+        try expectEqual(customLocal.localCoreVersion, CoreProfile.defaultManagedLocalCoreVersion)
+
+        let managedLocal = profiles[2]
+        try expectEqual(managedLocal.id, managedLocalID)
+        try expectEqual(managedLocal.localRuntimeMode, .managedPyPI)
+        try expectEqual(managedLocal.localWorkspaceDirectory, "/tmp/existing core workspace")
+        try expectEqual(managedLocal.localCommand, CoreProfile.legacyDefaultLocalCommand)
+
+        let relativeManagedLocal = profiles[3]
+        try expectEqual(relativeManagedLocal.id, relativeManagedLocalID)
+        try expectEqual(relativeManagedLocal.localRuntimeMode, .managedPyPI)
+        try expectEqual(
+            relativeManagedLocal.localWorkspaceDirectory,
+            URL(fileURLWithPath: "relative-core-workspace", isDirectory: true).standardizedFileURL.path
+        )
+
+        let roundTripped = try JSONDecoder().decode(
+            [CoreProfile].self,
+            from: JSONEncoder().encode(profiles)
+        )
+        try expectEqual(roundTripped, profiles)
+    }
+
+    private static func managedRuntimeBuildsPinnedPathsAndWebCommand() throws {
+        let root = try makeTemporaryDirectory(named: "managed runtime paths")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("Home", isDirectory: true)
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let workspace = root.appendingPathComponent("Workspace With Spaces", isDirectory: true)
+        var profile = CoreProfile.defaultLocal
+        profile.localCoreVersion = "0.3.0"
+        profile.localWorkspaceDirectory = workspace.path
+
+        let runtime = try ManagedLocalCoreRuntime(
+            profile: profile,
+            environment: [:],
+            applicationSupportDirectory: support,
+            homeDirectory: home
+        )
+        let expectedVersionDirectory = support
+            .appendingPathComponent("TeleMessEnd/CoreRuntime/versions/0.3.0", isDirectory: true)
+            .standardizedFileURL
+        try expectEqual(runtime.versionDirectory, expectedVersionDirectory)
+        try expectEqual(
+            runtime.managedCoreExecutableURL,
+            expectedVersionDirectory.appendingPathComponent("bin/tele-mess-core", isDirectory: false)
+        )
+
+        let command = runtime.runCommand()
+        try expectEqual(command.executableURL, runtime.managedCoreExecutableURL)
+        try expectEqual(
+            command.arguments,
+            ["run-local", "--workspace", workspace.standardizedFileURL.path, "--web"]
+        )
+        try expectNil(command.currentDirectoryURL)
+        try expectEqual(command.environment["UV_TOOL_DIR"], runtime.uvToolDirectory.path)
+        try expectEqual(command.environment["UV_TOOL_BIN_DIR"], runtime.uvBinDirectory.path)
+        try expectEqual(command.environment["UV_CACHE_DIR"], runtime.uvCacheDirectory.path)
+    }
+
+    private static func managedRuntimeLocatesUVWithoutShellStartup() throws {
+        let root = try makeTemporaryDirectory(named: "uv locator")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("Home", isDirectory: true)
+        let support = root.appendingPathComponent("Support", isDirectory: true)
+        let pathBin = root.appendingPathComponent("Injected Bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: pathBin, withIntermediateDirectories: true)
+        let uvExecutable = pathBin.appendingPathComponent("uv", isDirectory: false)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: uvExecutable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o755)],
+            ofItemAtPath: uvExecutable.path
+        )
+
+        let profile = CoreProfile.defaultLocal
+        let runtime = try ManagedLocalCoreRuntime(
+            profile: profile,
+            environment: [
+                "PATH": pathBin.path,
+                "HOME": home.path,
+                "UV_INDEX_URL": "https://untrusted.example/simple",
+                "UV_EXTRA_INDEX_URL": "https://extra.example/simple",
+                "UV_FIND_LINKS": "/tmp/untrusted-wheels",
+                "UV_CONSTRAINT": "/tmp/untrusted-constraints.txt",
+                "PIP_INDEX_URL": "https://pip-untrusted.example/simple",
+            ],
+            applicationSupportDirectory: support,
+            homeDirectory: home
+        )
+        try expectEqual(runtime.locateUVExecutable(), uvExecutable.standardizedFileURL)
+
+        let command = try runtime.installCommand(force: false)
+        try expectEqual(command.executableURL, uvExecutable.standardizedFileURL)
+        try expectEqual(
+            command.arguments,
+            [
+                "tool", "install",
+                "--no-config",
+                "--default-index", "https://pypi.org/simple",
+                "tele-mess-core==0.3.0",
+            ]
+        )
+        try expectEqual(
+            command.environment["PATH"]?.split(separator: ":").first.map(String.init),
+            runtime.uvBinDirectory.path
+        )
+        try expectNil(command.environment["UV_INDEX_URL"])
+        try expectNil(command.environment["UV_EXTRA_INDEX_URL"])
+        try expectNil(command.environment["UV_FIND_LINKS"])
+        try expectNil(command.environment["UV_CONSTRAINT"])
+        try expectNil(command.environment["PIP_INDEX_URL"])
+    }
+
+    private static func managedInstallationMarkerInvalidatesBeforeRepair() throws {
+        let root = try makeTemporaryDirectory(named: "installation marker")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var profile = CoreProfile.defaultLocal
+        profile.localWorkspaceDirectory = root.appendingPathComponent("Workspace").path
+        let runtime = try ManagedLocalCoreRuntime(
+            profile: profile,
+            environment: [:],
+            applicationSupportDirectory: root.appendingPathComponent("Support", isDirectory: true),
+            homeDirectory: root.appendingPathComponent("Home", isDirectory: true)
+        )
+        try runtime.prepareDirectories()
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: runtime.managedCoreExecutableURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o755)],
+            ofItemAtPath: runtime.managedCoreExecutableURL.path
+        )
+        try runtime.markInstalled()
+        try expectEqual(runtime.isInstalled, true)
+
+        try runtime.invalidateInstalledVersionMarker()
+
+        try expectEqual(runtime.isInstalled, false)
+        try expectEqual(FileManager.default.fileExists(atPath: runtime.installedVersionMarkerURL.path), false)
+        try expectEqual(FileManager.default.isExecutableFile(atPath: runtime.managedCoreExecutableURL.path), true)
+    }
+
+    private static func managedBootstrapIsPrivateAndNonDestructive() throws {
+        let root = try makeTemporaryDirectory(named: "bootstrap workspace")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("Core Workspace With Spaces", isDirectory: true)
+        var profile = CoreProfile.defaultLocal
+        profile.localWorkspaceDirectory = workspace.path
+        let runtime = try ManagedLocalCoreRuntime(
+            profile: profile,
+            environment: [:],
+            applicationSupportDirectory: root.appendingPathComponent("Support", isDirectory: true),
+            homeDirectory: root.appendingPathComponent("Home", isDirectory: true)
+        )
+        let apiHash = #"api-hash-\"quoted\"-\\value"#
+        let result = try runtime.bootstrapConfiguration(
+            LocalCoreBootstrapConfiguration(
+                accountID: "main account",
+                apiID: 123_456,
+                apiHash: apiHash,
+                sessionName: "main_session",
+                timezone: "Asia/Tokyo"
+            )
+        )
+
+        let originalData = try Data(contentsOf: result.configurationFileURL)
+        guard let originalText = String(data: originalData, encoding: .utf8),
+              let encodedHash = String(data: try JSONEncoder().encode(apiHash), encoding: .utf8),
+              let encodedToken = String(data: try JSONEncoder().encode(result.serverToken), encoding: .utf8) else {
+            throw RuntimeTestError.failure("Could not inspect generated local Core configuration")
+        }
+        try expectEqual(originalText.contains("api_id: 123456"), true)
+        try expectEqual(originalText.contains("api_hash: \(encodedHash)"), true)
+        try expectEqual(originalText.contains("token: \(encodedToken)"), true)
+        try expectEqual(originalText.contains("allow_unauthenticated_localhost: false"), true)
+        try expectEqual(runtime.workspaceStatus().isReadyForLaunch, true)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: result.configurationFileURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        try expectEqual(permissions.map { $0 & 0o777 }, 0o600)
+        let temporaryArtifacts = try FileManager.default.contentsOfDirectory(
+            atPath: result.workspaceDirectory.path
+        ).filter { $0.hasPrefix(".config.yml.") && $0.hasSuffix(".tmp") }
+        try expectEqual(temporaryArtifacts, [])
+
+        do {
+            _ = try runtime.bootstrapConfiguration(
+                LocalCoreBootstrapConfiguration(
+                    accountID: "replacement",
+                    apiID: 654_321,
+                    apiHash: "replacement-secret"
+                )
+            )
+            throw RuntimeTestError.failure("Expected an existing config to block bootstrap")
+        } catch let error as LocalCoreRuntimeSupportError {
+            try expectEqual(error, .configurationAlreadyExists(result.configurationFileURL))
+        }
+        try expectEqual(try Data(contentsOf: result.configurationFileURL), originalData)
+        try expectEqual(originalText.contains("replacement-secret"), false)
+    }
+
+    @MainActor
+    private static func managedBootstrapNormalizesBearerAuth() async throws {
+        let root = try makeTemporaryDirectory(named: "bootstrap bearer")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: StaticCredentialStore(token: "bootstrap-test-token")
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.authMode = .apiToken
+        profile.localWorkspaceDirectory = root.appendingPathComponent("Workspace", isDirectory: true).path
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        let created = model.bootstrapLocalCore(
+            LocalCoreBootstrapConfiguration(
+                accountID: "main",
+                apiID: 123_456,
+                apiHash: "fake-api-hash",
+                sessionName: "main",
+                timezone: "Asia/Tokyo"
+            )
+        )
+
+        try expectEqual(created, true)
+        try expectEqual(model.selectedProfile?.authMode, .bearer)
+        try expectEqual(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Workspace/config.yml").path
+            ),
+            true
+        )
+    }
+
+    @MainActor
+    private static func managedBootstrapRequestsKeychainAuthorizationBeforeWriting() async throws {
+        let root = try makeTemporaryDirectory(named: "bootstrap keychain authorization")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let credentials = AuthorizationFailingCredentialStore()
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: credentials
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        let workspace = root.appendingPathComponent("Workspace", isDirectory: true)
+        profile.localWorkspaceDirectory = workspace.path
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        let created = model.bootstrapLocalCore(
+            LocalCoreBootstrapConfiguration(
+                accountID: "main",
+                apiID: 123_456,
+                apiHash: "fake-api-hash"
+            )
+        )
+
+        try expectEqual(created, false)
+        try expectEqual(credentials.readAllowsAuthenticationUI, [true])
+        try expectEqual(credentials.saveCount, 0)
+        try expectEqual(model.localCoreKeychainAuthorizationRequired, true)
+        try expectEqual(model.statusMessage, "Keychain authorization required")
+        try expectEqual(
+            FileManager.default.fileExists(atPath: workspace.appendingPathComponent("config.yml").path),
+            false
+        )
+    }
+
+    @MainActor
+    private static func managedBootstrapRollsBackWhenKeychainSaveNeedsAuthorization() async throws {
+        let root = try makeTemporaryDirectory(named: "bootstrap keychain save authorization")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let credentials = SaveAuthorizationFailingCredentialStore()
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: credentials
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        let workspace = root.appendingPathComponent("Workspace", isDirectory: true)
+        profile.localWorkspaceDirectory = workspace.path
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        let created = model.bootstrapLocalCore(
+            LocalCoreBootstrapConfiguration(
+                accountID: "main",
+                apiID: 123_456,
+                apiHash: "fake-api-hash"
+            )
+        )
+
+        try expectEqual(created, false)
+        try expectEqual(credentials.readAllowsAuthenticationUI, [true])
+        try expectEqual(credentials.saveCount, 1)
+        try expectEqual(model.localCoreKeychainAuthorizationRequired, true)
+        try expectEqual(model.statusMessage, "Keychain authorization required")
+        try expectEqual(model.lastError?.contains("Repair Keychain Access & Retry"), true)
+        try expectEqual(
+            FileManager.default.fileExists(atPath: workspace.appendingPathComponent("config.yml").path),
+            false
+        )
+    }
+
+    @MainActor
+    private static func managedBootstrapRepairsKeychainAccessOnExplicitRetry() async throws {
+        let root = try makeTemporaryDirectory(named: "bootstrap keychain repair")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let credentials = RepairRecordingCredentialStore()
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: credentials
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        let workspace = root.appendingPathComponent("Workspace", isDirectory: true)
+        profile.localWorkspaceDirectory = workspace.path
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+        let configuration = LocalCoreBootstrapConfiguration(
+            accountID: "main",
+            apiID: 123_456,
+            apiHash: "fake-api-hash"
+        )
+
+        try expectEqual(model.bootstrapLocalCore(configuration), false)
+        try expectEqual(model.localCoreKeychainAuthorizationRequired, true)
+        try expectEqual(
+            model.bootstrapLocalCore(configuration, repairingKeychainAccess: true),
+            true
+        )
+        try expectEqual(credentials.forceResetRequests, [false, true])
+        try expectEqual(credentials.saveCount, 1)
+        try expectEqual(
+            FileManager.default.fileExists(atPath: workspace.appendingPathComponent("config.yml").path),
+            true
+        )
+    }
+
+    @MainActor
+    private static func automaticRefreshWaitsForManagedLocalSetup() async throws {
+        let root = try makeTemporaryDirectory(named: "managed onboarding")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: FailIfCalledTransport()
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localCoreVersion = "0.0.0+onboarding.\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        profile.localWorkspaceDirectory = root.appendingPathComponent("Workspace", isDirectory: true).path
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        await model.refreshCurrentSectionWhenIdle(allowKeychainUI: false)
+
+        try expectNil(model.dashboard.coreState)
+        try expectNil(model.lastError)
+        try expectEqual(model.validationStatus.title, "Unverified")
+        try expectEqual(model.statusMessage, "Install local Core to continue")
+    }
+
+    @MainActor
+    private static func customLocalCoreFollowsAwaitedLifecycle() async throws {
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let controller = LocalCoreProcessController(logger: logger)
+        var profile = CoreProfile.defaultLocal
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "trap 'printf term-observed; exit 0' TERM; printf started; while true; do sleep 0.05; done"
+        defer { controller.shutdown() }
+
+        let started: Bool = await controller.start(profile: profile)
+        try expectEqual(started, true)
+        try expectEqual(controller.phase, .starting)
+        try expectEqual(controller.isRunning, true)
+        try expectEqual(controller.runningProfileID, profile.id)
+        try expectEqual(controller.markReady(profileID: profile.id), true)
+        try expectEqual(controller.phase, .running)
+
+        let stopped: Bool = await controller.stop()
+        try expectEqual(stopped, true)
+        try expectEqual(controller.phase, .idle)
+        try expectEqual(controller.isRunning, false)
+        try expectNil(controller.runningProfileID)
+        try expectEqual(controller.lastOutput.contains("started"), true)
+        try expectEqual(controller.lastOutput.contains("term-observed"), true)
+    }
+
+    @MainActor
+    private static func customLocalCoreReportsEarlyExit() async throws {
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let controller = LocalCoreProcessController(logger: logger)
+        var profile = CoreProfile.defaultLocal
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "printf quick-failure; exit 23"
+        defer { controller.shutdown() }
+
+        let started: Bool = await controller.start(profile: profile)
+        try expectEqual(started, false)
+        try expectEqual(controller.phase, .failed)
+        try expectEqual(controller.isRunning, false)
+        try expectNil(controller.runningProfileID)
+        try expectEqual(controller.lastError?.contains("status 23"), true)
+        try expectEqual(controller.lastOutput.contains("quick-failure"), true)
+    }
+
+    @MainActor
+    private static func earlyExitCleanupReapsOwnedProcessGroup() async throws {
+        let root = try makeTemporaryDirectory(named: "owned-process-group")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let childPIDFile = root.appendingPathComponent("child.pid", isDirectory: false)
+        let quotedPIDFile = "'" + childPIDFile.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let controller = LocalCoreProcessController(logger: logger)
+        var profile = CoreProfile.defaultLocal
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "/bin/sleep 100 & printf '%s' $! > \(quotedPIDFile); exit 23"
+        defer { controller.shutdown() }
+
+        let started: Bool = await controller.start(profile: profile)
+        try expectEqual(started, false)
+        try expectEqual(controller.phase, .failed)
+        try expectEqual(controller.lastError?.contains("status 23"), true)
+
+        guard let rawPID = try? String(contentsOf: childPIDFile, encoding: .utf8),
+              let childPID = pid_t(rawPID.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw RuntimeTestError.failure("Could not read the early-exit descendant PID")
+        }
+        for _ in 0..<100 where processExists(childPID) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        try expectEqual(processExists(childPID), false)
+        try expectNil(controller.activeOperationID)
+        try expectNil(controller.activeProfileID)
+    }
+
+    @MainActor
+    private static func synchronousShutdownCrossesProcessGroupBarrier() async throws {
+        let root = try makeTemporaryDirectory(named: "shutdown-process-group")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let childPIDFile = root.appendingPathComponent("child.pid", isDirectory: false)
+        let quotedPIDFile = "'" + childPIDFile.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let controller = LocalCoreProcessController(logger: logger)
+        var profile = CoreProfile.defaultLocal
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "/bin/sleep 100 & printf '%s' $! > \(quotedPIDFile); wait"
+
+        try expectEqual(await controller.start(profile: profile), true)
+        guard let rawPID = try? String(contentsOf: childPIDFile, encoding: .utf8),
+              let childPID = pid_t(rawPID.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            controller.shutdown()
+            throw RuntimeTestError.failure("Could not read the shutdown descendant PID")
+        }
+        try expectEqual(processExists(childPID), true)
+
+        controller.shutdown()
+
+        try expectEqual(processExists(childPID), false)
+        try expectEqual(controller.phase, .idle)
+        try expectEqual(controller.isRunning, false)
+        try expectNil(controller.activeOperationID)
+        try expectNil(controller.activeProfileID)
+    }
+
+    @MainActor
+    private static func staleOperationOwnershipCannotStopNewerCore() async throws {
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let controller = LocalCoreProcessController(logger: logger)
+        defer { controller.shutdown() }
+
+        var firstProfile = CoreProfile.defaultLocal
+        firstProfile.localRuntimeMode = .customCommand
+        firstProfile.localCommand = "while true; do sleep 1; done"
+        try expectEqual(await controller.start(profile: firstProfile), true)
+        guard let firstOperationID = controller.activeOperationID else {
+            throw RuntimeTestError.failure("Expected the first operation owner")
+        }
+        try expectEqual(controller.activeProfileID, firstProfile.id)
+        try expectEqual(await controller.stop(ifOwnedByOperationID: firstOperationID), true)
+
+        var secondProfile = CoreProfile.defaultLocal
+        secondProfile.localRuntimeMode = .customCommand
+        secondProfile.localCommand = "while true; do sleep 1; done"
+        try expectEqual(await controller.start(profile: secondProfile), true)
+        guard let secondOperationID = controller.activeOperationID else {
+            throw RuntimeTestError.failure("Expected the second operation owner")
+        }
+        try expectEqual(secondOperationID == firstOperationID, false)
+        try expectEqual(controller.activeProfileID, secondProfile.id)
+
+        try expectEqual(await controller.stop(ifOwnedByOperationID: firstOperationID), true)
+        try expectEqual(controller.isRunning, true)
+        try expectEqual(controller.activeOperationID, secondOperationID)
+        try expectEqual(controller.activeProfileID, secondProfile.id)
+        try expectEqual(await controller.stop(ifOwnedByOperationID: secondOperationID), true)
+        try expectEqual(controller.isRunning, false)
+    }
+
+    @MainActor
+    private static func overlappingSameProfileWaitersPreserveReplacementOwner() async throws {
+        let root = try makeTemporaryDirectory(named: "same-profile-waiters")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let exitSentinel = root.appendingPathComponent("allow-old-exit", isDirectory: false)
+        let quotedSentinel = "'" + exitSentinel.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let controller = LocalCoreProcessController()
+        defer { controller.shutdown() }
+
+        var oldProfile = CoreProfile.defaultLocal
+        oldProfile.localRuntimeMode = .customCommand
+        oldProfile.localCommand = "trap '' TERM; while [ ! -f \(quotedSentinel) ]; do sleep 0.01; done"
+        try expectEqual(await controller.start(profile: oldProfile), true)
+
+        let staleStop = Task { @MainActor in await controller.stop() }
+        for _ in 0..<100 {
+            if controller.phase == .stopping { break }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        try expectEqual(controller.phase, .stopping)
+        try await Task.sleep(for: .milliseconds(50))
+
+        var replacementProfile = oldProfile
+        replacementProfile.localCommand = "while true; do sleep 0.1; done"
+        let replacementStart = Task { @MainActor in
+            await controller.start(profile: replacementProfile)
+        }
+        try await Task.sleep(for: .milliseconds(170))
+        try Data().write(to: exitSentinel)
+
+        let replacementStarted = await replacementStart.value
+        _ = await staleStop.value
+
+        try expectEqual(replacementStarted, true)
+        try expectEqual(controller.isRunning, true)
+        try expectEqual(controller.runningProfileID, replacementProfile.id)
+        try expectEqual(controller.activeProfileID, replacementProfile.id)
+        try expectEqual(controller.markReady(profileID: replacementProfile.id), true)
+        try expectEqual(await controller.stop(), true)
+    }
+
+    @MainActor
+    private static func appModelMarksCustomLocalCoreReadyFromAuthenticatedAPI() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let token = "local-readiness-token"
+        let buffer = AppRuntimeLogBuffer()
+        let logger = AppRuntimeLogger(
+            subsystem: "com.dreaifekks.TeleMessEnd.tests",
+            category: "runtime",
+            sink: buffer,
+            mirrorsToUnifiedLog: false
+        )
+        let localRunner = LocalCoreProcessController(logger: logger)
+        defer { localRunner.shutdown() }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: StaticCredentialStore(token: token),
+            localRunner: localRunner,
+            transport: LocalCoreReadinessTransport(expectedToken: token),
+            runtimeLogger: logger,
+            apiLogger: logger
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "printf app-model-started; while true; do sleep 0.1; done"
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        let started = await model.startLocalCore()
+        try expectEqual(started, true)
+        try expectEqual(localRunner.phase, .running)
+        try expectEqual(localRunner.runningProfileID, profile.id)
+        try expectEqual(model.validationStatus.title, "Verified")
+        try expectEqual(model.dashboard.apiManifest?.contractVersion, "2026-07-22.1")
+        try expectNil(model.lastError)
+
+        await model.stopLocalCore()
+        try expectEqual(localRunner.phase, .idle)
+        try expectEqual(localRunner.isRunning, false)
+        try expectNil(model.dashboard.coreState)
+        try expectEqual(model.validationStatus.title, "Unverified")
+    }
+
+    @MainActor
+    private static func savingRunningLocalProfileRequiresStop() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let localRunner = LocalCoreProcessController()
+        defer { localRunner.shutdown() }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            localRunner: localRunner,
+            transport: FailIfCalledTransport()
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "while true; do sleep 0.1; done"
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+        try expectEqual(await localRunner.start(profile: profile), true)
+        try expectEqual(localRunner.markReady(profileID: profile.id), true)
+
+        var editedProfile = profile
+        editedProfile.name = "Edited while running"
+        try expectEqual(model.saveProfile(editedProfile, token: nil), false)
+        try expectEqual(model.selectedProfile?.name, profile.name)
+        try expectEqual(localRunner.isRunning, true)
+        try expectEqual(model.lastError, "Stop this local Core before changing its profile settings.")
+
+        try expectEqual(await localRunner.stop(), true)
+    }
+
+    @MainActor
+    private static func supersededAppModelStartCannotStopNewerCore() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let token = "superseded-start-token"
+        let transport = SupersedingLocalCoreTransport(expectedToken: token)
+        let localRunner = LocalCoreProcessController()
+        defer { localRunner.shutdown() }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: StaticCredentialStore(token: token),
+            localRunner: localRunner,
+            transport: transport
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "while true; do sleep 0.1; done"
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        let firstStart = Task { @MainActor in await model.startLocalCore() }
+        for _ in 0..<200 {
+            if await transport.healthRequestCount() > 0 { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        try expectEqual(await transport.healthRequestCount() > 0, true)
+
+        let secondStarted = await model.startLocalCore()
+        let firstStarted = await firstStart.value
+
+        try expectEqual(firstStarted, false)
+        try expectEqual(secondStarted, true)
+        try expectEqual(localRunner.phase, .running)
+        try expectEqual(localRunner.runningProfileID, profile.id)
+        try expectEqual(localRunner.isRunning, true)
+        await model.stopLocalCore()
+    }
+
+    @MainActor
+    private static func stoppingDuringValidationCannotRestoreStaleState() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let token = "stale-validation-token"
+        let transport = DelayedLocalCoreValidationTransport(expectedToken: token)
+        let localRunner = LocalCoreProcessController()
+        defer { localRunner.shutdown() }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: StaticCredentialStore(token: token),
+            localRunner: localRunner,
+            transport: transport
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "while true; do sleep 0.1; done"
+        try expectEqual(model.saveProfile(profile, token: nil), true)
+
+        let startTask = Task { @MainActor in await model.startLocalCore() }
+        for _ in 0..<300 {
+            if await transport.validationHasStarted() { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        try expectEqual(await transport.validationHasStarted(), true)
+
+        await model.stopLocalCore()
+        let started = await startTask.value
+
+        try expectEqual(started, false)
+        try expectEqual(localRunner.phase, .idle)
+        try expectEqual(localRunner.isRunning, false)
+        try expectEqual(model.validationStatus.title, "Unverified")
+        try expectEqual(model.statusMessage, "Local Core stopped")
+        try expectNil(model.lastError)
     }
 
     @MainActor
@@ -286,6 +1166,23 @@ enum RuntimeStateTests {
         )
     }
 
+    private static func keychainAuthorizationUnlocksBeforeReadingCredentials() throws {
+        let profileID = UUID()
+        let backend = MemoryKeychainItemBackend()
+        let namespaces = MemoryCredentialNamespaceStore()
+        let authorizer = RecordingDefaultKeychainAuthorizer()
+        let store = KeychainStore(
+            backend: backend,
+            namespaceStore: namespaces,
+            defaultKeychainAuthorizer: authorizer
+        )
+
+        try store.requestAuthorization(profileID: profileID, forceResetDefaultKeychain: true)
+
+        try expectEqual(authorizer.forceResetRequests, [true])
+        try expectEqual(backend.readAllowsAuthenticationUI, [true])
+    }
+
     private static func managedClearMasksLegacyToken() throws {
         let profileID = UUID()
         let backend = MemoryKeychainItemBackend()
@@ -360,9 +1257,12 @@ enum RuntimeStateTests {
         )
         let runner = LocalCoreProcessController(logger: logger)
         var profile = CoreProfile.defaultLocal
-        profile.localCommand = "printf before-clear; sleep 0.15; printf after-clear"
-        runner.start(profile: profile)
-        defer { runner.stop() }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "printf before-clear; sleep 0.5; printf after-clear; while true; do sleep 1; done"
+        defer { runner.shutdown() }
+
+        let started: Bool = await runner.start(profile: profile)
+        try expectEqual(started, true)
 
         for _ in 0..<100 where !runner.lastOutput.contains("before-clear") {
             try? await Task.sleep(for: .milliseconds(5))
@@ -370,10 +1270,12 @@ enum RuntimeStateTests {
         try expectEqual(runner.lastOutput.contains("before-clear"), true)
         runner.clearOutput()
 
-        for _ in 0..<200 where runner.isRunning || runner.lastOutput != "after-clear" {
+        for _ in 0..<200 where runner.lastOutput != "after-clear" {
             try? await Task.sleep(for: .milliseconds(5))
         }
         try expectEqual(runner.lastOutput, "after-clear")
+        let stopped: Bool = await runner.stop()
+        try expectEqual(stopped, true)
     }
 
     private static func keychainRuntimeLogsOmitCredentialMaterial() throws {
@@ -595,6 +1497,12 @@ enum RuntimeStateTests {
             keychain: EmptyCredentialStore(),
             transport: CapabilityBootstrapTransport()
         )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "test-core"
+        try expectEqual(model.saveProfile(profile, token: nil), true)
         model.selectedSection = .summaries
 
         await model.refreshCurrentSectionWhenIdle(allowKeychainUI: false)
@@ -614,6 +1522,12 @@ enum RuntimeStateTests {
             keychain: EmptyCredentialStore(),
             transport: MessagePointRuntimeTransport()
         )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        profile.localRuntimeMode = .customCommand
+        profile.localCommand = "test-core"
+        try expectEqual(model.saveProfile(profile, token: nil), true)
         model.selectedSection = .messagePoints
         model.messagePointSearchQuery = "needle"
         model.messagePointDateFilter = "2026-07-11"
@@ -695,8 +1609,32 @@ enum RuntimeStateTests {
 
 private let defaultsSuiteName = "TeleMessEndTests.RuntimeSession"
 
+private func makeTemporaryDirectory(named name: String) throws -> URL {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("TeleMessEndTests-\(name)-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+private func processExists(_ processID: pid_t) -> Bool {
+    guard processID > 1 else { return false }
+    if Darwin.kill(processID, 0) == 0 {
+        return true
+    }
+    return errno == EPERM
+}
+
 private struct EmptyCredentialStore: CredentialStore {
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { nil }
+    func saveToken(_ token: String, profileID: UUID) throws {}
+    func clearToken(profileID: UUID) throws {}
+    func deleteToken(profileID: UUID) throws {}
+}
+
+private struct StaticCredentialStore: CredentialStore {
+    var token: String
+
+    func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { token }
     func saveToken(_ token: String, profileID: UUID) throws {}
     func clearToken(profileID: UUID) throws {}
     func deleteToken(profileID: UUID) throws {}
@@ -712,13 +1650,71 @@ private struct InteractionBlockedCredentialStore: CredentialStore {
     func deleteToken(profileID: UUID) throws {}
 }
 
+private final class AuthorizationFailingCredentialStore: CredentialStore, @unchecked Sendable {
+    private(set) var readAllowsAuthenticationUI: [Bool] = []
+    private(set) var saveCount = 0
+
+    func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? {
+        readAllowsAuthenticationUI.append(allowAuthenticationUI)
+        throw KeychainError(status: errSecAuthFailed)
+    }
+
+    func saveToken(_ token: String, profileID: UUID) throws {
+        saveCount += 1
+    }
+
+    func clearToken(profileID: UUID) throws {}
+    func deleteToken(profileID: UUID) throws {}
+}
+
+private final class SaveAuthorizationFailingCredentialStore: CredentialStore, @unchecked Sendable {
+    private(set) var readAllowsAuthenticationUI: [Bool] = []
+    private(set) var saveCount = 0
+
+    func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? {
+        readAllowsAuthenticationUI.append(allowAuthenticationUI)
+        return nil
+    }
+
+    func saveToken(_ token: String, profileID: UUID) throws {
+        saveCount += 1
+        throw KeychainError(status: errSecAuthFailed)
+    }
+
+    func clearToken(profileID: UUID) throws {}
+    func deleteToken(profileID: UUID) throws {}
+}
+
+private final class RepairRecordingCredentialStore: CredentialStore, @unchecked Sendable {
+    private(set) var forceResetRequests: [Bool] = []
+    private(set) var saveCount = 0
+
+    func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { nil }
+
+    func requestAuthorization(profileID: UUID, forceResetDefaultKeychain: Bool) throws {
+        forceResetRequests.append(forceResetDefaultKeychain)
+        if !forceResetDefaultKeychain {
+            throw KeychainError(status: errSecAuthFailed)
+        }
+    }
+
+    func saveToken(_ token: String, profileID: UUID) throws {
+        saveCount += 1
+    }
+
+    func clearToken(profileID: UUID) throws {}
+    func deleteToken(profileID: UUID) throws {}
+}
+
 private final class MemoryKeychainItemBackend: KeychainItemBackend, @unchecked Sendable {
     var values: [String: String] = [:]
     var readFailures: [String: KeychainError] = [:]
     var upsertFailures: [String: KeychainError] = [:]
     var deleteFailures: [String: KeychainError] = [:]
+    private(set) var readAllowsAuthenticationUI: [Bool] = []
 
     func read(service: String, profileID: UUID, allowAuthenticationUI: Bool) throws -> String? {
+        readAllowsAuthenticationUI.append(allowAuthenticationUI)
         if let failure = readFailures[service] {
             throw failure
         }
@@ -737,6 +1733,14 @@ private final class MemoryKeychainItemBackend: KeychainItemBackend, @unchecked S
             throw failure
         }
         values.removeValue(forKey: service)
+    }
+}
+
+private final class RecordingDefaultKeychainAuthorizer: DefaultKeychainAuthorizer, @unchecked Sendable {
+    private(set) var forceResetRequests: [Bool] = []
+
+    func requestUnlock(forceReset: Bool) throws {
+        forceResetRequests.append(forceReset)
     }
 }
 
@@ -780,6 +1784,100 @@ private struct FailIfCalledTransport: CoreHTTPTransport {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         throw RuntimeTestError.failure("Transport should not be called without a remote profile token")
     }
+}
+
+private struct LocalCoreReadinessTransport: CoreHTTPTransport {
+    var expectedToken: String
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.value(forHTTPHeaderField: "Authorization") == "Bearer \(expectedToken)" else {
+            throw RuntimeTestError.failure("Expected the local readiness token")
+        }
+
+        let json: String
+        switch request.url?.path {
+        case "/healthz", "/sync/state":
+            json = #"{"database_id":"local-db","schema_version":2,"last_event_seq":0,"message_count":0,"ok":true}"#
+        case "/manage/api-manifest":
+            json = #"{"name":"tele-mess-core","contract_version":"2026-07-22.1","contract_hash":"local-test","endpoints":[]}"#
+        case "/manage/capabilities":
+            json = #"{"mode":"single_user","management":[]}"#
+        case "/sync/messages", "/manage/operation-events":
+            json = #"{"items":[]}"#
+        default:
+            throw RuntimeTestError.failure("Unexpected local readiness path \(request.url?.path ?? "")")
+        }
+        return try response(for: request, json: json)
+    }
+}
+
+private actor SupersedingLocalCoreTransport: CoreHTTPTransport {
+    let expectedToken: String
+    private var healthRequests = 0
+
+    init(expectedToken: String) {
+        self.expectedToken = expectedToken
+    }
+
+    func healthRequestCount() -> Int {
+        healthRequests
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.value(forHTTPHeaderField: "Authorization") == "Bearer \(expectedToken)" else {
+            throw RuntimeTestError.failure("Expected the superseded-start token")
+        }
+        if request.url?.path == "/healthz" {
+            healthRequests += 1
+            if healthRequests == 1 {
+                try await Task.sleep(for: .milliseconds(800))
+            }
+        }
+        return try localCoreRuntimeResponse(for: request)
+    }
+}
+
+private actor DelayedLocalCoreValidationTransport: CoreHTTPTransport {
+    let expectedToken: String
+    private var validationStarted = false
+
+    init(expectedToken: String) {
+        self.expectedToken = expectedToken
+    }
+
+    func validationHasStarted() -> Bool {
+        validationStarted
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.value(forHTTPHeaderField: "Authorization") == "Bearer \(expectedToken)" else {
+            throw RuntimeTestError.failure("Expected the stale-validation token")
+        }
+        if request.url?.path == "/sync/state" {
+            validationStarted = true
+            try await Task.sleep(for: .milliseconds(800))
+        }
+        return try localCoreRuntimeResponse(for: request)
+    }
+}
+
+private func localCoreRuntimeResponse(
+    for request: URLRequest
+) throws -> (Data, HTTPURLResponse) {
+    let json: String
+    switch request.url?.path {
+    case "/healthz", "/sync/state":
+        json = #"{"database_id":"local-db","schema_version":2,"last_event_seq":0,"message_count":0,"ok":true}"#
+    case "/manage/api-manifest":
+        json = #"{"name":"tele-mess-core","contract_version":"2026-07-22.1","contract_hash":"local-test","endpoints":[]}"#
+    case "/manage/capabilities":
+        json = #"{"mode":"single_user","management":[]}"#
+    case "/sync/messages", "/manage/operation-events":
+        json = #"{"items":[]}"#
+    default:
+        throw RuntimeTestError.failure("Unexpected local runtime path \(request.url?.path ?? "")")
+    }
+    return try response(for: request, json: json)
 }
 
 private struct PrivateSearchTransport: CoreHTTPTransport {

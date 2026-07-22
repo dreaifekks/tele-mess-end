@@ -6,6 +6,9 @@ the macOS V1 client.
 Reference checked: live `tele-mess-core` OpenAPI contract `2026-07-10.4`
 (`bf0d29cf60733f79`) on 2026-07-11.
 
+Local runtime reference checked: `tele-mess-core` PyPI/CLI `0.3.0` on
+2026-07-22.
+
 ## Runtime Model
 
 The core is a single-user, multi-Telegram-account archive and management
@@ -50,6 +53,39 @@ Mac V1:
 
 - Use `/healthz` or `/sync/state` for profile connection checks.
 - Provide an "Open Console" action for the active profile.
+
+## Managed Local Core CLI
+
+The managed local profile is a lifecycle boundary around the public PyPI CLI,
+not a second archive implementation:
+
+- Install the pinned distribution with
+  `uv tool install --no-config --default-index https://pypi.org/simple tele-mess-core==0.3.0`,
+  filter inherited `UV_*`/`PIP_*` variables that can change package sources or
+  constraints, and set app-specific `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, and
+  `UV_CACHE_DIR` paths under TeleMessEnd Application Support.
+- Execute the installed console script directly. Do not point persistent state
+  at an incidental `uvx` cache or depend on login-shell PATH initialization.
+- Start HTTP-backed local mode with the exact argument structure
+  `tele-mess-core run-local --workspace <absolute-path> --web`. In particular,
+  `run-local` without `--web` does not expose the API used by this client.
+- Default the Core-owned workspace to
+  `~/Library/Application Support/tele-mess-core`. Relative storage, session, and
+  log paths in `config.yml` resolve inside that workspace.
+- A fresh workspace requires one Telegram account template with `api_id` and
+  `api_hash`, plus a local server token. Bootstrap creates the configuration
+  exclusively with user-only permissions and never overwrites an existing file;
+  the matching client token is stored in Keychain.
+- Process launch is only the Starting state. Poll authenticated `/healthz` until
+  `ok` is not false, then fetch `/manage/api-manifest` before reporting Ready.
+  Authentication failures are terminal; connection refusal is retryable until
+  the bounded readiness timeout or process exit.
+- Send SIGTERM for normal stop, wait for exit before relaunching, and stop the
+  owned process when its profile is replaced or the app terminates.
+
+The Custom Command mode remains available for development and unusual
+installations. It intentionally preserves the prior shell-command behavior, but
+does not participate in managed install or workspace bootstrap.
 
 ## Sync API
 
@@ -554,5 +590,6 @@ Initial methods:
 7. Daily analysis: schedule/run progress, typed persisted summary records,
    validated message points, record/item inspection, and Telegram delivery
    configuration.
-8. Local core runner: start/stop/status for a configured local `tele-mess-core`
-   command after remote profile support is stable.
+8. Local core runner: pinned PyPI install, secure workspace bootstrap,
+   `run-local --web`, authenticated readiness, graceful lifecycle ownership, and
+   an explicit custom-command escape hatch.

@@ -103,6 +103,7 @@ private final class OwnedLocalCoreProcess: @unchecked Sendable {
     private var exitSource: DispatchSourceProcess?
 
     var isRunning: Bool {
+        reapExitedLeader(waitOptions: WNOHANG)
         lock.lock()
         defer { lock.unlock() }
         return running
@@ -176,11 +177,7 @@ private final class OwnedLocalCoreProcess: @unchecked Sendable {
         }
         if actionError == 0, let directory = command.currentDirectoryURL {
             actionError = directory.path.withCString {
-                if #available(macOS 26.0, *) {
-                    posix_spawn_file_actions_addchdir(&fileActions, $0)
-                } else {
-                    posix_spawn_file_actions_addchdir_np(&fileActions, $0)
-                }
+                posix_spawn_file_actions_addchdir_np(&fileActions, $0)
             }
         }
         guard actionError == 0 else {
@@ -240,7 +237,7 @@ private final class OwnedLocalCoreProcess: @unchecked Sendable {
         lock.unlock()
 
         source.setEventHandler { [weak self] in
-            self?.reapExitedLeader()
+            self?.reapExitedLeader(waitOptions: 0)
         }
         source.resume()
     }
@@ -258,11 +255,11 @@ private final class OwnedLocalCoreProcess: @unchecked Sendable {
         return errno == ESRCH
     }
 
-    private func reapExitedLeader() {
+    private func reapExitedLeader(waitOptions: Int32) {
         var rawStatus: Int32 = 0
         var result: pid_t
         repeat {
-            result = Darwin.waitpid(processIdentifier, &rawStatus, 0)
+            result = Darwin.waitpid(processIdentifier, &rawStatus, waitOptions)
         } while result == -1 && errno == EINTR
         guard result == processIdentifier else { return }
 

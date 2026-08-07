@@ -143,6 +143,13 @@ struct SettingsView: View {
                                 Label("Clear Token", systemImage: "key.slash")
                             }
                         }
+                        Text(tokenWasEdited
+                            ? (token.isEmpty
+                                ? "The saved token will be cleared when you choose Save."
+                                : "The new token will be stored in macOS Keychain when you choose Save.")
+                            : "Saved tokens are never shown here. Enter the Core API token when creating a profile, or leave this blank to keep an existing token.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .disabled(profileEditingIsLocked)
 
@@ -155,6 +162,25 @@ struct SettingsView: View {
                         Label(model.statusMessage, systemImage: "checkmark.circle")
                             .foregroundStyle(.secondary)
                             .font(.callout)
+                    }
+
+                    if model.profileSaveKeychainAuthorizationRequired {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(
+                                "TeleMessEnd will temporarily lock and reopen the default Keychain so macOS can show its password dialog.",
+                                systemImage: "key.fill"
+                            )
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+
+                            Button {
+                                repairKeychainAccessAndRetryDraft()
+                            } label: {
+                                Label("Repair Keychain Access & Retry", systemImage: "key.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(profileEditingIsLocked)
+                        }
                     }
                 }
 
@@ -193,6 +219,7 @@ struct SettingsView: View {
                         Button {
                             draft = model.addRemoteProfile()
                             token = ""
+                            tokenWasEdited = false
                         } label: {
                             Label("Add Remote Core", systemImage: "plus")
                         }
@@ -200,6 +227,7 @@ struct SettingsView: View {
                         Button {
                             draft = model.addLocalProfile()
                             token = ""
+                            tokenWasEdited = false
                         } label: {
                             Label("Add Local Core", systemImage: "plus")
                         }
@@ -376,6 +404,16 @@ struct SettingsView: View {
             tokenWasEdited = false
         }
         return succeeded
+    }
+
+    private func repairKeychainAccessAndRetryDraft() {
+        let succeeded = model.repairKeychainAccessAndSaveProfile(
+            draft,
+            token: tokenWasEdited ? token : nil
+        )
+        if succeeded {
+            tokenWasEdited = false
+        }
     }
 
     private func loadDraft() {

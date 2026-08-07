@@ -49,6 +49,8 @@ private let recentMessageRefreshIntervalNanoseconds: UInt64 = 5 * 60 * 1_000_000
 private let dailySummaryProgressRefreshIntervalNanoseconds: UInt64 = 10 * 1_000_000_000
 private let localCoreKeychainAuthorizationMessage =
     "macOS Keychain rejected the credential operation. Choose Repair Keychain Access & Retry to reopen the default Keychain, then enter its password in the system dialog. No Core configuration has been kept."
+private let profileSaveKeychainAuthorizationMessage =
+    "macOS Keychain rejected the credential operation. Choose Repair Keychain Access & Retry to reopen the default Keychain, then enter its password in the system dialog. Your Profile draft has been kept."
 
 private enum TokenReadMode {
     case promptIfNeeded
@@ -164,6 +166,7 @@ final class AppModel {
     @ObservationIgnored private var compatibilityCheckedSessionRevision: UInt64?
     @ObservationIgnored private var localCoreLifecycleRevision: UInt64 = 0
     @ObservationIgnored private var lastCredentialSaveRequiresAuthorization = false
+    @ObservationIgnored private var failedCredentialSaveProfileID: UUID?
 
     var selectedSection: AppSection = .dashboard
     var settingsSection: SettingsSection = .core
@@ -187,6 +190,7 @@ final class AppModel {
     var statusMessage = "Ready"
     var lastError: String?
     var validationStatus: CoreValidationStatus = .unverified
+    private(set) var profileSaveKeychainAuthorizationRequired = false
     private(set) var localCoreKeychainAuthorizationRequired = false
 
     var originSearch = ""
@@ -1170,6 +1174,8 @@ final class AppModel {
         }
         runtimeLogger.info("Profile save begin profileSuffix=\(profileSuffix) credential=\(credentialAction)")
         lastCredentialSaveRequiresAuthorization = false
+        profileSaveKeychainAuthorizationRequired = false
+        failedCredentialSaveProfileID = nil
         if localRunner.activeProfileID == profile.id {
             lastError = "Stop this local Core before changing its profile settings."
             statusMessage = "Stop local Core first"
@@ -1194,18 +1200,68 @@ final class AppModel {
             statusMessage = "Profile saved"
             lastError = nil
             lastCredentialSaveRequiresAuthorization = false
+            profileSaveKeychainAuthorizationRequired = false
+            failedCredentialSaveProfileID = nil
             localCoreKeychainAuthorizationRequired = false
             runtimeLogger.info("Profile save end profileSuffix=\(profileSuffix) result=success")
             return true
         } catch {
             lastCredentialSaveRequiresAuthorization =
                 (error as? KeychainError)?.requiresUserAuthorization == true
+            profileSaveKeychainAuthorizationRequired = lastCredentialSaveRequiresAuthorization
+            failedCredentialSaveProfileID = lastCredentialSaveRequiresAuthorization ? profile.id : nil
             localCoreKeychainAuthorizationRequired = false
-            lastError = error.localizedDescription
-            statusMessage = "Failed"
+            lastError = lastCredentialSaveRequiresAuthorization
+                ? profileSaveKeychainAuthorizationMessage
+                : error.localizedDescription
+            statusMessage = lastCredentialSaveRequiresAuthorization
+                ? "Keychain authorization required"
+                : "Failed"
             runtimeLogger.error("Profile save end profileSuffix=\(profileSuffix) result=failure error=\(safeRuntimeErrorSummary(error))")
             return false
         }
+    }
+
+    @discardableResult
+    func repairKeychainAccessAndSaveProfile(_ profile: CoreProfile, token: String?) -> Bool {
+        let profileSuffix = String(profile.id.uuidString.suffix(8))
+        runtimeLogger.info("Profile Keychain repair begin profileSuffix=\(profileSuffix)")
+        guard profileSaveKeychainAuthorizationRequired,
+              failedCredentialSaveProfileID == profile.id,
+              token != nil else {
+            lastError = "Retry Save first so TeleMessEnd can identify the credential operation that needs Keychain repair."
+            statusMessage = "Failed"
+            runtimeLogger.warning(
+                "Profile Keychain repair blocked profileSuffix=\(profileSuffix) reason=no_matching_failed_save"
+            )
+            return false
+        }
+        do {
+            // This path is only called from the explicit Repair button. Never
+            // lock or reopen the user's default Keychain during an ordinary Save.
+            try keychain.repairDefaultKeychainAccess(profileID: profile.id)
+        } catch {
+            let requiresAuthorization =
+                (error as? KeychainError)?.requiresUserAuthorization == true
+            lastCredentialSaveRequiresAuthorization = requiresAuthorization
+            profileSaveKeychainAuthorizationRequired = requiresAuthorization
+            failedCredentialSaveProfileID = requiresAuthorization ? profile.id : nil
+            localCoreKeychainAuthorizationRequired = false
+            lastError = requiresAuthorization
+                ? profileSaveKeychainAuthorizationMessage
+                : error.localizedDescription
+            statusMessage = requiresAuthorization ? "Keychain authorization required" : "Failed"
+            runtimeLogger.warning(
+                "Profile Keychain repair end profileSuffix=\(profileSuffix) result=failure error=\(safeRuntimeErrorSummary(error))"
+            )
+            return false
+        }
+
+        let succeeded = saveProfile(profile, token: token)
+        runtimeLogger.info(
+            "Profile Keychain repair end profileSuffix=\(profileSuffix) result=\(succeeded ? "success" : "save_failed")"
+        )
+        return succeeded
     }
 
     @discardableResult
@@ -1297,6 +1353,8 @@ final class AppModel {
         }
 
         let profileSuffix = String(profile.id.uuidString.suffix(8))
+        profileSaveKeychainAuthorizationRequired = false
+        failedCredentialSaveProfileID = nil
         runtimeLogger.info("Local core bootstrap begin profileSuffix=\(profileSuffix)")
         do {
             // This user-initiated operation explicitly unlocks the default
@@ -1329,6 +1387,8 @@ final class AppModel {
             guard saveProfile(profile, token: result.serverToken) else {
                 try? FileManager.default.removeItem(at: result.configurationFileURL)
                 localCoreKeychainAuthorizationRequired = lastCredentialSaveRequiresAuthorization
+                profileSaveKeychainAuthorizationRequired = false
+                failedCredentialSaveProfileID = nil
                 if lastCredentialSaveRequiresAuthorization {
                     lastError = localCoreKeychainAuthorizationMessage
                     statusMessage = "Keychain authorization required"
@@ -1486,6 +1546,8 @@ final class AppModel {
         compatibilityCheckedSessionRevision = nil
         tokenCache = nil
         lastCredentialSaveRequiresAuthorization = false
+        profileSaveKeychainAuthorizationRequired = false
+        failedCredentialSaveProfileID = nil
         localCoreKeychainAuthorizationRequired = false
         activeOperations.removeAll()
         latestOperationIDs.removeAll()

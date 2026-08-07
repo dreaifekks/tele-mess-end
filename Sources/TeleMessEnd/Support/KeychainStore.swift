@@ -5,6 +5,7 @@ import Security
 protocol CredentialStore: Sendable {
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String?
     func requestAuthorization(profileID: UUID, forceResetDefaultKeychain: Bool) throws
+    func repairDefaultKeychainAccess(profileID: UUID) throws
     func saveToken(_ token: String, profileID: UUID) throws
     func clearToken(profileID: UUID) throws
     func deleteToken(profileID: UUID) throws
@@ -158,6 +159,23 @@ struct KeychainStore: CredentialStore, Sendable {
             throw error
         }
         _ = try readToken(profileID: profileID, allowAuthenticationUI: true)
+    }
+
+    func repairDefaultKeychainAccess(profileID: UUID) throws {
+        let profileSuffix = String(profileID.uuidString.suffix(8))
+        logger.info("Default Keychain repair begin profileSuffix=\(profileSuffix)")
+        do {
+            // Explicit Profile repair only reopens the default Keychain. Do not
+            // read the old item here: a damaged item must not block the later
+            // managed-namespace rotation performed by saveToken/clearToken.
+            try defaultKeychainAuthorizer.requestUnlock(forceReset: true)
+            logger.info("Default Keychain repair end profileSuffix=\(profileSuffix) result=success")
+        } catch {
+            logger.warning(
+                "Default Keychain repair end profileSuffix=\(profileSuffix) result=failure error=\(safeKeychainErrorSummary(error))"
+            )
+            throw error
+        }
     }
 
     func saveToken(_ token: String, profileID: UUID) throws {
@@ -328,7 +346,7 @@ struct KeychainError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch status {
         case errSecAuthFailed:
-            "TeleMessEnd could not access the existing token in macOS Keychain. Enter the token again and choose Save to create a replacement credential."
+            "macOS Keychain rejected the credential operation. Unlock the login Keychain and retry."
         case errSecInteractionNotAllowed:
             "The saved token requires Keychain authorization. Open Core Settings and choose Test Connection."
         case errSecMissingEntitlement:

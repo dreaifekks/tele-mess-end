@@ -66,6 +66,9 @@ enum RuntimeStateTests {
         await runner.run("saving a running local profile requires an explicit stop") {
             try await savingRunningLocalProfileRequiresStop()
         }
+        await runner.run("profile save repairs Keychain only after explicit retry") {
+            try profileSaveRepairsKeychainOnlyAfterExplicitRetry()
+        }
         await runner.run("superseded AppModel start cannot stop the newer Core") {
             try await supersededAppModelStartCannotStopNewerCore()
         }
@@ -95,6 +98,9 @@ enum RuntimeStateTests {
         }
         await runner.run("Keychain authorization unlocks before reading credentials") {
             try keychainAuthorizationUnlocksBeforeReadingCredentials()
+        }
+        await runner.run("explicit Keychain repair unlocks without reading credentials") {
+            try explicitKeychainRepairUnlocksWithoutReadingCredentials()
         }
         await runner.run("managed clear masks a legacy token") {
             try managedClearMasksLegacyToken()
@@ -921,6 +927,57 @@ enum RuntimeStateTests {
     }
 
     @MainActor
+    private static func profileSaveRepairsKeychainOnlyAfterExplicitRetry() throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let credentials = ProfileSaveRepairCredentialStore()
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: credentials
+        )
+        guard var profile = model.selectedProfile else {
+            throw RuntimeTestError.failure("Expected the default local profile")
+        }
+        let originalName = profile.name
+        profile.name = "Repaired Profile"
+
+        try expectEqual(model.saveProfile(profile, token: "test-token"), false)
+        try expectEqual(credentials.saveCount, 1)
+        try expectEqual(credentials.forceResetRequests, [])
+        try expectEqual(model.selectedProfile?.name, originalName)
+        try expectEqual(model.profileSaveKeychainAuthorizationRequired, true)
+        try expectEqual(
+            model.lastError?.contains("Repair Keychain Access & Retry"),
+            true
+        )
+
+        var differentProfile = profile
+        differentProfile.id = UUID()
+        try expectEqual(
+            model.repairKeychainAccessAndSaveProfile(differentProfile, token: "test-token"),
+            false
+        )
+        try expectEqual(
+            model.repairKeychainAccessAndSaveProfile(profile, token: nil),
+            false
+        )
+        try expectEqual(credentials.forceResetRequests, [])
+        try expectEqual(credentials.saveCount, 1)
+        try expectEqual(model.selectedProfile?.name, originalName)
+
+        try expectEqual(
+            model.repairKeychainAccessAndSaveProfile(profile, token: "test-token"),
+            true
+        )
+        try expectEqual(credentials.forceResetRequests, [true])
+        try expectEqual(credentials.saveCount, 2)
+        try expectEqual(model.selectedProfile?.name, "Repaired Profile")
+        try expectEqual(model.profileSaveKeychainAuthorizationRequired, false)
+        try expectNil(model.lastError)
+    }
+
+    @MainActor
     private static func supersededAppModelStartCannotStopNewerCore() async throws {
         let defaults = makeDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
@@ -1181,6 +1238,23 @@ enum RuntimeStateTests {
 
         try expectEqual(authorizer.forceResetRequests, [true])
         try expectEqual(backend.readAllowsAuthenticationUI, [true])
+    }
+
+    private static func explicitKeychainRepairUnlocksWithoutReadingCredentials() throws {
+        let profileID = UUID()
+        let backend = MemoryKeychainItemBackend()
+        let namespaces = MemoryCredentialNamespaceStore()
+        let authorizer = RecordingDefaultKeychainAuthorizer()
+        let store = KeychainStore(
+            backend: backend,
+            namespaceStore: namespaces,
+            defaultKeychainAuthorizer: authorizer
+        )
+
+        try store.repairDefaultKeychainAccess(profileID: profileID)
+
+        try expectEqual(authorizer.forceResetRequests, [true])
+        try expectEqual(backend.readAllowsAuthenticationUI, [])
     }
 
     private static func managedClearMasksLegacyToken() throws {
@@ -1626,6 +1700,7 @@ private func processExists(_ processID: pid_t) -> Bool {
 
 private struct EmptyCredentialStore: CredentialStore {
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { nil }
+    func repairDefaultKeychainAccess(profileID: UUID) throws {}
     func saveToken(_ token: String, profileID: UUID) throws {}
     func clearToken(profileID: UUID) throws {}
     func deleteToken(profileID: UUID) throws {}
@@ -1635,6 +1710,7 @@ private struct StaticCredentialStore: CredentialStore {
     var token: String
 
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { token }
+    func repairDefaultKeychainAccess(profileID: UUID) throws {}
     func saveToken(_ token: String, profileID: UUID) throws {}
     func clearToken(profileID: UUID) throws {}
     func deleteToken(profileID: UUID) throws {}
@@ -1645,6 +1721,7 @@ private struct InteractionBlockedCredentialStore: CredentialStore {
         throw KeychainError(status: errSecInteractionNotAllowed)
     }
 
+    func repairDefaultKeychainAccess(profileID: UUID) throws {}
     func saveToken(_ token: String, profileID: UUID) throws {}
     func clearToken(profileID: UUID) throws {}
     func deleteToken(profileID: UUID) throws {}
@@ -1656,6 +1733,10 @@ private final class AuthorizationFailingCredentialStore: CredentialStore, @unche
 
     func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? {
         readAllowsAuthenticationUI.append(allowAuthenticationUI)
+        throw KeychainError(status: errSecAuthFailed)
+    }
+
+    func repairDefaultKeychainAccess(profileID: UUID) throws {
         throw KeychainError(status: errSecAuthFailed)
     }
 
@@ -1675,6 +1756,8 @@ private final class SaveAuthorizationFailingCredentialStore: CredentialStore, @u
         readAllowsAuthenticationUI.append(allowAuthenticationUI)
         return nil
     }
+
+    func repairDefaultKeychainAccess(profileID: UUID) throws {}
 
     func saveToken(_ token: String, profileID: UUID) throws {
         saveCount += 1
@@ -1698,8 +1781,40 @@ private final class RepairRecordingCredentialStore: CredentialStore, @unchecked 
         }
     }
 
+    func repairDefaultKeychainAccess(profileID: UUID) throws {
+        forceResetRequests.append(true)
+    }
+
     func saveToken(_ token: String, profileID: UUID) throws {
         saveCount += 1
+    }
+
+    func clearToken(profileID: UUID) throws {}
+    func deleteToken(profileID: UUID) throws {}
+}
+
+private final class ProfileSaveRepairCredentialStore: CredentialStore, @unchecked Sendable {
+    private(set) var forceResetRequests: [Bool] = []
+    private(set) var saveCount = 0
+    private var accessWasRepaired = false
+
+    func readToken(profileID: UUID, allowAuthenticationUI: Bool) throws -> String? { nil }
+
+    func requestAuthorization(profileID: UUID, forceResetDefaultKeychain: Bool) throws {
+        forceResetRequests.append(forceResetDefaultKeychain)
+        accessWasRepaired = forceResetDefaultKeychain
+    }
+
+    func repairDefaultKeychainAccess(profileID: UUID) throws {
+        forceResetRequests.append(true)
+        accessWasRepaired = true
+    }
+
+    func saveToken(_ token: String, profileID: UUID) throws {
+        saveCount += 1
+        guard accessWasRepaired else {
+            throw KeychainError(status: errSecAuthFailed)
+        }
     }
 
     func clearToken(profileID: UUID) throws {}

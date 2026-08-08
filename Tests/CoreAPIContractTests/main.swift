@@ -12,6 +12,7 @@ enum CoreAPIContractTests {
         await runner.run("accounts and auth flow") { try await testAccountsAndAuthFlow() }
         await runner.run("origins and policies") { try await testOriginsAndPolicies() }
         await runner.run("diagnostics endpoints") { try await testDiagnosticsEndpoints() }
+        await runner.run("media response presentation and incremental display") { try testMediaFilePresentation() }
         await runner.run("daily package and summary endpoints") { try await testDailyPackageAndSummaryEndpoints() }
         await runner.run("daily message point endpoints") { try await testDailyMessagePointEndpoints() }
         await runner.run("media content download") { try await testMediaContentDownload() }
@@ -545,7 +546,6 @@ enum CoreAPIContractTests {
 
         let mediaClient = makeClient(
             expectedPath: "/sync/media-files",
-            expectedQueryItems: ["account_id=main", "chat_id=-1001", "message_id=99", "limit=500"],
             responseJSON:
             """
             {
@@ -557,6 +557,9 @@ enum CoreAPIContractTests {
                   "message_id": 99,
                   "file_index": 0,
                   "file_path": "/archive/file.jpg",
+                  "filename": "报告 + & #1.MP4",
+                  "file_extension": "mp4",
+                  "media_type": "video",
                   "media_kind": "photo",
                   "file_size": 123,
                   "origin_title": "Ops",
@@ -566,11 +569,48 @@ enum CoreAPIContractTests {
                 }
               ]
             }
-            """
+            """,
+            verify: { request in
+                try expectEqual(try requestQueryValues(request), [
+                    "account_id": ["main"],
+                    "chat_id": ["-1001"],
+                    "message_id": ["99"],
+                    "filename_query": ["报告 + & #1"],
+                    "media_type": ["video"],
+                    "file_extension": ["mp4"],
+                    "limit": ["500"]
+                ])
+            }
         )
-        let media = try await mediaClient.listMediaFiles(accountID: "main", chatID: -1001, messageID: 99)
+        let media = try await mediaClient.listMediaFiles(
+            accountID: "main",
+            chatID: -1001,
+            messageID: 99,
+            filenameQuery: "  报告 + & #1  ",
+            mediaType: "VIDEO",
+            fileExtension: " .MP4 "
+        )
         try expectEqual(media.first?.mediaKind, "photo")
         try expectEqual(media.first?.originTitle, "Ops")
+        try expectEqual(media.first?.suggestedFilename, "报告 + & #1.MP4")
+        try expectEqual(media.first?.fileExtension, "mp4")
+        try expectEqual(media.first?.displayType, .video)
+
+        let emptyMediaFiltersClient = makeClient(
+            expectedPath: "/sync/media-files",
+            responseJSON: #"{"items": []}"#,
+            verify: { request in
+                try expectEqual(try requestQueryValues(request), ["limit": ["500"]])
+            }
+        )
+        try expectEqual(
+            try await emptyMediaFiltersClient.listMediaFiles(
+                filenameQuery: "   ",
+                mediaType: " ",
+                fileExtension: " . "
+            ).count,
+            0
+        )
     }
 
     static func testDailyPackageAndSummaryEndpoints() async throws {
@@ -786,6 +826,192 @@ enum CoreAPIContractTests {
             }
         )
         try expectEqual(try await restoreRecordsClient.restoreDailySummaryRecords(summaryIDs: ["rec-1"]).deleted, false)
+    }
+
+    static func testMediaFilePresentation() throws {
+        let files = try JSONDecoder.core.decode(
+            [CoreMediaFile].self,
+            from: Data(
+                """
+                [
+                  {
+                    "source": "telegram",
+                    "account_id": "main",
+                    "chat_id": 42,
+                    "message_id": 100,
+                    "file_index": 0,
+                    "file_path": "/archive/photos/Summer Trip.JPG",
+                    "media_kind": "photo",
+                    "content_type": "image/jpeg",
+                    "preview_kind": "image",
+                    "origin_title": "Ops"
+                  },
+                  {
+                    "source": "telegram",
+                    "account_id": "main",
+                    "chat_id": 42,
+                    "message_id": 101,
+                    "file_index": 0,
+                    "file_path": "/archive/videos/Launch.MP4",
+                    "media_kind": "video",
+                    "mime_type": "video/mp4",
+                    "preview_kind": "video",
+                    "origin_title": "Ops"
+                  },
+                  {
+                    "source": "telegram",
+                    "account_id": "main",
+                    "chat_id": 42,
+                    "message_id": 102,
+                    "file_index": 0,
+                    "file_path": "/archive/notes/ReadMe.MD",
+                    "media_kind": "document",
+                    "content_type": "text/markdown",
+                    "preview_kind": "text",
+                    "origin_title": "Ops"
+                  },
+                  {
+                    "source": "telegram",
+                    "account_id": "main",
+                    "chat_id": 42,
+                    "message_id": 103,
+                    "file_index": 2,
+                    "media_kind": "unknown",
+                    "content_type": "application/octet-stream",
+                    "origin_title": "Ops"
+                  },
+                  {
+                    "source": "telegram",
+                    "account_id": "main",
+                    "chat_id": 42,
+                    "message_id": 104,
+                    "file_index": 0,
+                    "file_path": "/archive/notes/Payload.JSON",
+                    "media_kind": "document",
+                    "content_type": "application/octet-stream",
+                    "preview_kind": "document",
+                    "origin_title": "Ops"
+                  },
+                  {
+                    "source": "telegram",
+                    "account_id": "main",
+                    "chat_id": 42,
+                    "message_id": 105,
+                    "file_index": 0,
+                    "media_kind": "video",
+                    "origin_title": "Ops"
+                  }
+                ]
+                """.utf8
+            )
+        )
+
+        try expectEqual(files.map(\.suggestedFilename), [
+            "Summer Trip.JPG",
+            "Launch.MP4",
+            "ReadMe.MD",
+            "media-42-103-2.bin",
+            "Payload.JSON",
+            "media-42-105-0.mp4"
+        ])
+        try expectEqual(files.map(\.fileExtension), ["jpg", "mp4", "md", nil, "json", nil])
+        try expectEqual(files.map(\.displayType), [.image, .video, .text, .other, .text, .video])
+
+        let lexicalPathFile = try JSONDecoder.core.decode(
+            CoreMediaFile.self,
+            from: Data(
+                """
+                {
+                  "source": "telegram",
+                  "account_id": "main",
+                  "chat_id": 42,
+                  "message_id": 106,
+                  "file_index": 0,
+                  "file_path": "/core-only/archive/离线 100% #1.TAR.GZ",
+                  "media_kind": "document"
+                }
+                """.utf8
+            )
+        )
+        try expectEqual(lexicalPathFile.suggestedFilename, "离线 100% #1.TAR.GZ")
+        try expectEqual(lexicalPathFile.fileExtension, "gz")
+
+        let authoritativeFile = try JSONDecoder.core.decode(
+            CoreMediaFile.self,
+            from: Data(
+                """
+                {
+                  "source": "telegram",
+                  "account_id": "main",
+                  "chat_id": 42,
+                  "message_id": 107,
+                  "file_index": 0,
+                  "file_path": "/archive/fallback.jpg",
+                  "filename": "Server Report",
+                  "file_extension": "",
+                  "media_type": "text",
+                  "media_kind": "photo",
+                  "content_type": "image/jpeg",
+                  "preview_kind": "image"
+                }
+                """.utf8
+            )
+        )
+        try expectEqual(authoritativeFile.suggestedFilename, "Server Report")
+        try expectEqual(authoritativeFile.fileExtension, nil, "An explicit empty server extension must not fall back to the path or MIME type")
+        try expectEqual(authoritativeFile.displayType, .text, "The normalized server media type must be authoritative")
+
+        var listState = MediaFileListState(batchSize: 100)
+        var snapshot = listState.snapshot(from: [])
+        try expectEqual(snapshot.visibleFiles.count, 0)
+        try expectEqual(snapshot.returnedCount, 0)
+        try expectEqual(snapshot.hasMore, false)
+
+        snapshot = listState.snapshot(from: Array(repeating: files[0], count: 99))
+        try expectEqual(snapshot.visibleFiles.count, 99)
+        try expectEqual(snapshot.hasMore, false)
+
+        snapshot = listState.snapshot(from: Array(repeating: files[0], count: 100))
+        try expectEqual(snapshot.visibleFiles.count, 100)
+        try expectEqual(snapshot.hasMore, false)
+
+        snapshot = listState.snapshot(from: Array(repeating: files[0], count: 101))
+        try expectEqual(snapshot.visibleFiles.count, 100)
+        try expectEqual(snapshot.returnedCount, 101)
+        try expectEqual(snapshot.remainingCount, 1)
+        try expectEqual(snapshot.hasMore, true)
+        listState.showMore(returnedCount: snapshot.returnedCount)
+        snapshot = listState.snapshot(from: Array(repeating: files[0], count: 101))
+        try expectEqual(snapshot.visibleFiles.count, 101)
+        try expectEqual(snapshot.hasMore, false)
+        listState.showMore(returnedCount: snapshot.returnedCount)
+        try expectEqual(listState.visibleLimit, 101, "Showing more at the end must not exceed the returned count")
+
+        let fiveHundredFiles = Array(repeating: files[0], count: 500)
+        listState = MediaFileListState(batchSize: 100)
+        listState.showMore(returnedCount: fiveHundredFiles.count)
+        listState.showMore(returnedCount: fiveHundredFiles.count)
+        snapshot = listState.snapshot(from: fiveHundredFiles)
+        try expectEqual(snapshot.visibleFiles.count, 300)
+        try expectEqual(snapshot.returnedCount, 500)
+
+        listState.resetVisibleLimit()
+        snapshot = listState.snapshot(from: fiveHundredFiles)
+        try expectEqual(snapshot.visibleFiles.count, 100, "A new server result must reset incremental display")
+        try expectEqual(listState.visibleLimit, 100)
+
+        var debounceGate = MediaFilenameDebounceGate()
+        let firstTicket = debounceGate.schedule(query: "v")
+        let secondTicket = debounceGate.schedule(query: "vi")
+        let finalTicket = debounceGate.schedule(query: "video")
+        try expectEqual(debounceGate.accepts(firstTicket), false)
+        try expectEqual(debounceGate.accepts(secondTicket), false)
+        try expectEqual(debounceGate.accepts(finalTicket), true)
+        debounceGate.cancelPending()
+        try expectEqual(debounceGate.accepts(finalTicket), false, "Clear or session reset must invalidate pending search work")
+        let emptyTicket = debounceGate.schedule(query: "")
+        try expectEqual(debounceGate.accepts(emptyTicket), true)
+        try expectEqual(emptyTicket.query, "")
     }
 
     static func testDailyMessagePointEndpoints() async throws {
@@ -1069,6 +1295,15 @@ private struct MockTransport: CoreHTTPTransport {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         try handler(request)
     }
+}
+
+private func requestQueryValues(_ request: URLRequest) throws -> [String: [String]] {
+    guard let url = request.url,
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+        throw ContractError.failure("Expected a valid request URL")
+    }
+    return Dictionary(grouping: components.queryItems ?? [], by: \.name)
+        .mapValues { items in items.compactMap(\.value) }
 }
 
 private func requestJSONObject(_ request: URLRequest) throws -> [String: Any] {

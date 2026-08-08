@@ -6,6 +6,7 @@ enum CoreAPIError: LocalizedError, Equatable {
     case httpStatus(Int, String)
     case missingProfile
     case missingToken
+    case unsupportedFeature(String)
     case transport(String)
 
     var errorDescription: String? {
@@ -20,6 +21,8 @@ enum CoreAPIError: LocalizedError, Equatable {
             "Select or create a core profile first."
         case .missingToken:
             "This profile has no saved API token."
+        case .unsupportedFeature(let feature):
+            "The selected Core does not support \(feature). Update tele-mess-core and try again."
         case .transport(let message):
             message
         }

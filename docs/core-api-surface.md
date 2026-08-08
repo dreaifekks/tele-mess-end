@@ -208,9 +208,11 @@ Mac V1:
 
 Endpoint:
 
-- `GET /sync/media-files?account_id=main&chat_id=-1001&message_id=1&limit=500`
+- `GET /sync/media-files?account_id=main&chat_id=-1001&message_id=1&filename_query=report&media_type=text&file_extension=md&limit=500`
 
-Filters are optional.
+Filters are optional and combine with AND semantics. The Core applies
+`filename_query`, normalized `media_type`, and exact `file_extension` filters
+before ordering and `limit`, so `limit=500` means the first 500 matching rows.
 
 Fields:
 
@@ -220,6 +222,9 @@ Fields:
 - `message_id`
 - `file_index`
 - `file_path`
+- `filename`
+- `file_extension`
+- `media_type`
 - `media_kind`
 - `mime_type`
 - `file_size`

@@ -637,6 +637,9 @@ struct CoreMediaFile: Decodable, Identifiable, Hashable {
     var messageID: Int
     var fileIndex: Int
     var filePath: String?
+    var filename: String?
+    var apiFileExtension: String?
+    var mediaType: String?
     var mediaKind: String?
     var mimeType: String?
     var fileSize: Int?
@@ -652,29 +655,129 @@ struct CoreMediaFile: Decodable, Identifiable, Hashable {
     var id: String { "\(source):\(accountID):\(chatID):\(messageID):\(fileIndex)" }
     var displayTitle: String { originTitle ?? chatTitle ?? "\(chatID)" }
     var bestURLString: String? { downloadURL ?? accessURL }
+    var hasServerMediaFilterMetadata: Bool {
+        filename != nil && apiFileExtension != nil && mediaType != nil
+    }
+    var fileExtension: String? {
+        if let apiFileExtension {
+            let normalized = apiFileExtension
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .drop(while: { $0 == "." })
+                .lowercased()
+            return normalized.isEmpty ? nil : normalized
+        }
+        if let filenameFromFilePath {
+            let pathExtension = (filenameFromFilePath as NSString).pathExtension
+            return pathExtension.isEmpty ? nil : pathExtension.lowercased()
+        }
+        return inferredFileExtension
+    }
     var suggestedFilename: String {
-        if let filePath, !filePath.isEmpty {
-            let name = URL(fileURLWithPath: filePath).lastPathComponent
-            if !name.isEmpty {
-                return name
+        if let filename, !filename.isEmpty {
+            return filename
+        }
+        if let filenameFromFilePath {
+            return filenameFromFilePath
+        }
+        let ext = inferredFileExtension ?? fallbackFilenameExtension
+        return "media-\(chatID)-\(messageID)-\(fileIndex).\(ext)"
+    }
+
+    private var filenameFromFilePath: String? {
+        guard let filePath, !filePath.isEmpty else { return nil }
+        // file_path describes the Core host's archive, not a path on this Mac.
+        // NSString path parsing is lexical and avoids URL(fileURLWithPath:)'s
+        // filesystem probe (`lstat`) for remote/nonexistent paths.
+        let filename = (filePath as NSString).lastPathComponent
+        return filename.isEmpty ? nil : filename
+    }
+
+    private var inferredFileExtension: String? {
+        for rawHint in [mimeType, contentType].compactMap({ $0?.lowercased() }) {
+            switch rawHint {
+            case let value where value.contains("jpeg") || value.contains("jpg"):
+                return "jpg"
+            case let value where value.contains("png"):
+                return "png"
+            case let value where value.contains("gif"):
+                return "gif"
+            case let value where value.contains("webp"):
+                return "webp"
+            case let value where value.contains("heic") || value.contains("heif"):
+                return "heic"
+            case let value where value.contains("tiff"):
+                return "tiff"
+            case let value where value.contains("svg"):
+                return "svg"
+            case let value where value.hasPrefix("video/mp4"):
+                return "mp4"
+            case let value where value.contains("quicktime"):
+                return "mov"
+            case let value where value.contains("webm"):
+                return "webm"
+            case let value where value.contains("matroska"):
+                return "mkv"
+            case let value where value.hasPrefix("video/mpeg"):
+                return "mpg"
+            case let value where value.hasPrefix("audio/mpeg"):
+                return "mp3"
+            case let value where value.hasPrefix("audio/mp4"):
+                return "m4a"
+            case let value where value.contains("wav"):
+                return "wav"
+            case let value where value.contains("aac"):
+                return "aac"
+            case let value where value.contains("flac"):
+                return "flac"
+            case let value where value.contains("ogg") || value.contains("opus"):
+                return "ogg"
+            case let value where value.contains("markdown"):
+                return "md"
+            case let value where value.contains("ndjson") || value.contains("jsonl"):
+                return "jsonl"
+            case let value where value.contains("json"):
+                return "json"
+            case let value where value.contains("csv"):
+                return "csv"
+            case let value where value.contains("html"):
+                return "html"
+            case let value where value.contains("xml"):
+                return "xml"
+            case let value where value.contains("yaml") || value.contains("yml"):
+                return "yaml"
+            case let value where value.hasPrefix("text/"):
+                return "txt"
+            case let value where value.contains("pdf"):
+                return "pdf"
+            case let value where value.contains("wordprocessingml"):
+                return "docx"
+            case let value where value.contains("msword"):
+                return "doc"
+            case let value where value.contains("spreadsheetml"):
+                return "xlsx"
+            case let value where value.contains("presentationml"):
+                return "pptx"
+            case let value where value.contains("rtf"):
+                return "rtf"
+            default:
+                continue
             }
         }
-        let ext: String
-        switch (mimeType ?? contentType ?? mediaKind ?? "").lowercased() {
-        case let value where value.contains("jpeg") || value.contains("jpg"):
-            ext = "jpg"
-        case let value where value.contains("png"):
-            ext = "png"
-        case let value where value.contains("gif"):
-            ext = "gif"
-        case let value where value.contains("mp4") || value.contains("video"):
-            ext = "mp4"
-        case let value where value.contains("pdf"):
-            ext = "pdf"
-        default:
-            ext = "bin"
+
+        return nil
+    }
+
+    private var fallbackFilenameExtension: String {
+        let kindHint = [previewKind, mediaKind]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+        if kindHint.contains("video") || kindHint.contains("movie") {
+            return "mp4"
         }
-        return "media-\(chatID)-\(messageID)-\(fileIndex).\(ext)"
+        if kindHint.contains("pdf") {
+            return "pdf"
+        }
+        return "bin"
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -684,6 +787,9 @@ struct CoreMediaFile: Decodable, Identifiable, Hashable {
         case messageID = "message_id"
         case fileIndex = "file_index"
         case filePath = "file_path"
+        case filename
+        case apiFileExtension = "file_extension"
+        case mediaType = "media_type"
         case mediaKind = "media_kind"
         case mimeType = "mime_type"
         case fileSize = "file_size"

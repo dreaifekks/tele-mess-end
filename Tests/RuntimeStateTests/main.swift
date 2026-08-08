@@ -138,6 +138,18 @@ enum RuntimeStateTests {
         await runner.run("newer search wins within one profile") {
             try await newerSearchWins()
         }
+        await runner.run("newer media filter request wins within one profile") {
+            try await newerMediaFilterWins()
+        }
+        await runner.run("media filtering waits for a blocking operation") {
+            try await mediaFilterWaitsForBlockingOperation()
+        }
+        await runner.run("old Core media responses fail instead of masquerading as filtered") {
+            try await oldCoreMediaFilterFailsExplicitly()
+        }
+        await runner.run("media filters and results reset with the profile session") {
+            try mediaFiltersResetWithSession()
+        }
         await runner.run("manifest bootstraps before feature loading") {
             try await manifestBootstrapsBeforeFeatureLoad()
         }
@@ -1562,6 +1574,135 @@ enum RuntimeStateTests {
     }
 
     @MainActor
+    private static func newerMediaFilterWins() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: ReorderedMediaTransport()
+        )
+
+        model.mediaFilenameQuery = "slow"
+        let slowLoad = Task { await model.loadMediaFiles(allowKeychainUI: false) }
+        try await Task.sleep(for: .milliseconds(10))
+        model.mediaFilenameQuery = "fast"
+        let fastLoad = Task { await model.loadMediaFiles(allowKeychainUI: false) }
+        await fastLoad.value
+        await slowLoad.value
+
+        try expectEqual(model.mediaFiles.map(\.suggestedFilename), ["fast.txt"])
+        try expectEqual(model.isLoading, false)
+        try expectNil(model.lastError)
+    }
+
+    @MainActor
+    private static func mediaFilterWaitsForBlockingOperation() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: BlockingAccountsThenMediaTransport()
+        )
+
+        let blockingLoad = Task { await model.loadAccounts(allowKeychainUI: false) }
+        try await Task.sleep(for: .milliseconds(10))
+        model.mediaFilenameQuery = "after-busy"
+        let mediaLoad = Task { await model.loadMediaFiles(allowKeychainUI: false) }
+        try await Task.sleep(for: .milliseconds(20))
+        try expectEqual(model.isMediaQueryPending, true)
+        try expectEqual(model.mediaFiles.count, 0)
+
+        await blockingLoad.value
+        await mediaLoad.value
+
+        try expectEqual(model.mediaFiles.map(\.suggestedFilename), ["after-busy.txt"])
+        try expectEqual(model.isMediaQueryPending, false)
+        try expectNil(model.lastError)
+    }
+
+    @MainActor
+    private static func oldCoreMediaFilterFailsExplicitly() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: LegacyMediaTransport()
+        )
+        model.mediaFilenameQuery = "needle"
+
+        await model.loadMediaFiles(allowKeychainUI: false)
+
+        try expectEqual(model.mediaFiles.count, 0)
+        try expectEqual(model.isMediaQueryPending, false)
+        try expectEqual(model.lastError?.contains("does not support server-side media filtering"), true)
+    }
+
+    @MainActor
+    private static func mediaFiltersResetWithSession() throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: FailIfCalledTransport()
+        )
+
+        model.mediaAccountFilter = "main"
+        model.mediaChatIDFilter = "-1001"
+        model.mediaMessageIDFilter = "42"
+        model.mediaFilenameQuery = "report"
+        model.mediaTypeFilter = "text"
+        model.mediaFileExtensionFilter = "md"
+        model.clearMediaFilters()
+        try expectEqual(
+            [
+                model.mediaAccountFilter,
+                model.mediaChatIDFilter,
+                model.mediaMessageIDFilter,
+                model.mediaFilenameQuery,
+                model.mediaTypeFilter,
+                model.mediaFileExtensionFilter
+            ],
+            Array(repeating: "", count: 6)
+        )
+
+        model.mediaAccountFilter = "main"
+        model.mediaChatIDFilter = "-1001"
+        model.mediaMessageIDFilter = "42"
+        model.mediaFilenameQuery = "report"
+        model.mediaTypeFilter = "text"
+        model.mediaFileExtensionFilter = "md"
+        model.mediaFiles = try JSONDecoder.core.decode(
+            [CoreMediaFile].self,
+            from: Data(
+                #"[{"source":"telegram","account_id":"main","chat_id":-1001,"message_id":42,"file_index":0,"filename":"report.md","file_extension":"md","media_type":"text"}]"#.utf8
+            )
+        )
+
+        _ = model.addRemoteProfile()
+
+        try expectEqual(
+            [
+                model.mediaAccountFilter,
+                model.mediaChatIDFilter,
+                model.mediaMessageIDFilter,
+                model.mediaFilenameQuery,
+                model.mediaTypeFilter,
+                model.mediaFileExtensionFilter
+            ],
+            Array(repeating: "", count: 6)
+        )
+        try expectEqual(model.mediaFiles.count, 0)
+    }
+
+    @MainActor
     private static func manifestBootstrapsBeforeFeatureLoad() async throws {
         let defaults = makeDefaults()
         defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
@@ -2077,6 +2218,55 @@ private actor ReorderedSearchTransport: CoreHTTPTransport {
                 """
                 {"items":[{"source":"telegram","account_id":"main","chat_id":-1001,"message_id":2,"text":"\(query)","has_media":false}]}
                 """
+        )
+    }
+}
+
+private actor ReorderedMediaTransport: CoreHTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.url?.path == "/sync/media-files",
+              let query = queryValues(request)["filename_query"]?.first else {
+            throw RuntimeTestError.failure("Unexpected media request")
+        }
+        try await Task.sleep(for: query == "slow" ? .milliseconds(100) : .milliseconds(10))
+        return try response(
+            for: request,
+            json:
+                """
+                {"items":[{"source":"telegram","account_id":"main","chat_id":-1001,"message_id":2,"file_index":0,"filename":"\(query).txt","file_extension":"txt","media_type":"text"}]}
+                """
+        )
+    }
+}
+
+private actor BlockingAccountsThenMediaTransport: CoreHTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        switch request.url?.path {
+        case "/manage/accounts":
+            try await Task.sleep(for: .milliseconds(80))
+            return try response(for: request, json: #"{"items": []}"#)
+        case "/sync/media-files":
+            guard queryValues(request)["filename_query"] == ["after-busy"] else {
+                throw RuntimeTestError.failure("Media request did not preserve its filter while waiting")
+            }
+            return try response(
+                for: request,
+                json: #"{"items":[{"source":"telegram","account_id":"main","chat_id":-1001,"message_id":2,"file_index":0,"filename":"after-busy.txt","file_extension":"txt","media_type":"text"}]}"#
+            )
+        default:
+            throw RuntimeTestError.failure("Unexpected path \(request.url?.path ?? "")")
+        }
+    }
+}
+
+private struct LegacyMediaTransport: CoreHTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard request.url?.path == "/sync/media-files" else {
+            throw RuntimeTestError.failure("Unexpected path \(request.url?.path ?? "")")
+        }
+        return try response(
+            for: request,
+            json: #"{"items":[{"source":"telegram","account_id":"main","chat_id":-1001,"message_id":2,"file_index":0,"file_path":"/archive/unfiltered.jpg","media_kind":"photo"}]}"#
         )
     }
 }

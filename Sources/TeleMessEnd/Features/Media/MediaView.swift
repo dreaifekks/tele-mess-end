@@ -5,16 +5,43 @@ import SwiftUI
 struct MediaView: View {
     @Bindable var model: AppModel
     @State private var selection: CoreMediaFile.ID?
+    @State private var listState = MediaFileListState()
+    @State private var textFilterResetRevision: UInt = 0
+    @State private var mediaReloadTask: Task<Void, Never>?
 
     var body: some View {
+        let snapshot = listState.snapshot(from: model.mediaFiles)
+        let rows = snapshot.visibleFiles.map(MediaTableRow.init)
+        let visibleFileIDs = Set(rows.map(\.id))
+        let selectedFile = selection.flatMap { selectedID in
+            snapshot.visibleFiles.first { $0.id == selectedID }
+        }
+
         HSplitView {
             VStack(alignment: .leading, spacing: 14) {
-                filters
+                filters(snapshot: snapshot)
 
-                if model.mediaFiles.isEmpty {
-                    EmptyStateView(title: "No media files", detail: "Media records matching the current filters appear here.", systemImage: "photo.on.rectangle")
+                if model.isMediaQueryPending && snapshot.visibleFiles.isEmpty {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Querying matching media from Core…")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if snapshot.visibleFiles.isEmpty {
+                    EmptyStateView(
+                        title: model.lastError == nil
+                            ? (hasActiveMediaFilters ? "No matching media" : "No media files")
+                            : "Media request failed",
+                        detail: model.lastError == nil
+                            ? (hasActiveMediaFilters
+                                ? "The Core returned no media matching the current server-side filters."
+                                : "Downloaded media records appear here.")
+                            : "The latest server-side query did not complete. Update an older Core if needed, then try Reload.",
+                        systemImage: model.lastError == nil ? "photo.on.rectangle" : "exclamationmark.triangle"
+                    )
                 } else {
-                    MediaManagementTable(files: model.mediaFiles, selection: $selection)
+                    MediaManagementTable(rows: rows, selection: $selection)
                 }
             }
             .padding(20)
@@ -27,127 +54,315 @@ struct MediaView: View {
                 .padding(.leading, 12)
         }
         .navigationTitle("Media")
-        .disabled(model.isLoading)
         .task(id: model.sessionRevision) {
-            selection = nil
+            mediaReloadTask?.cancel()
+            resetLocalPresentation()
+        }
+        .onChange(of: model.mediaFilesRevision) {
+            listState.resetVisibleLimit()
+        }
+        .onChange(of: visibleFileIDs) {
+            if let selection, !visibleFileIDs.contains(selection) {
+                self.selection = nil
+            }
+        }
+        .onDisappear {
+            mediaReloadTask?.cancel()
         }
     }
 
-    private var filters: some View {
+    private func filters(snapshot: MediaFileListSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                TextField("Account", text: $model.mediaAccountFilter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
-                TextField("Chat ID", text: $model.mediaChatIDFilter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 130)
-                TextField("Message ID", text: $model.mediaMessageIDFilter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 130)
-                Button {
-                    Task { await model.loadMediaFiles() }
-                } label: {
-                    Label("Reload", systemImage: "arrow.clockwise")
+                DebouncedMediaTextField(
+                    prompt: "Search filename",
+                    text: Binding(
+                        get: { model.mediaFilenameQuery },
+                        set: commitFilenameQuery
+                    ),
+                    resetRevision: $textFilterResetRevision
+                )
+                .frame(minWidth: 190, idealWidth: 250, maxWidth: 320)
+                Picker(
+                    "Type",
+                    selection: Binding(
+                        get: { model.mediaTypeFilter },
+                        set: commitMediaType
+                    )
+                ) {
+                    Text("All types").tag("")
+                    ForEach(MediaFileType.allCases) { type in
+                        Text(type.title).tag(type.rawValue)
+                    }
                 }
-                Button {
-                    model.mediaAccountFilter = ""
-                    model.mediaChatIDFilter = ""
-                    model.mediaMessageIDFilter = ""
-                    Task { await model.loadMediaFiles() }
-                } label: {
-                    Label("Clear", systemImage: "line.3.horizontal.decrease.circle")
-                }
+                .frame(width: 155)
+                DebouncedMediaTextField(
+                    prompt: "Extension",
+                    text: Binding(
+                        get: { model.mediaFileExtensionFilter },
+                        set: commitFileExtension
+                    ),
+                    resetRevision: $textFilterResetRevision
+                )
+                .frame(width: 175)
                 Spacer()
-                Text("\(model.mediaFiles.count) files")
+            }
+            MediaCoreFilterControls(
+                model: model,
+                reload: {
+                    scheduleMediaReload()
+                },
+                clear: {
+                    model.clearMediaFilters()
+                    resetLocalPresentation()
+                    scheduleMediaReload()
+                }
+            )
+            HStack {
+                Spacer()
+                if model.isMediaQueryPending {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Updating server results…")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(
+                        snapshot.returnedCount == 500
+                            ? "\(snapshot.visibleFiles.count) shown / 500 returned · result cap reached"
+                            : "\(snapshot.visibleFiles.count) shown / \(snapshot.returnedCount) returned"
+                    )
                     .foregroundStyle(.secondary)
+                    .help("The Core applies filename, type, and extension filters before returning at most 500 matching files.")
+                }
+                if snapshot.hasMore {
+                    Button {
+                        listState.showMore(returnedCount: snapshot.returnedCount)
+                    } label: {
+                        Label(
+                            "Show \(min(listState.batchSize, snapshot.remainingCount)) More",
+                            systemImage: "chevron.down"
+                        )
+                    }
+                }
             }
         }
     }
 
-    private var selectedFile: CoreMediaFile? {
-        guard let selection else { return nil }
-        return model.mediaFiles.first { $0.id == selection }
+    private var hasActiveMediaFilters: Bool {
+        [
+            model.mediaAccountFilter,
+            model.mediaChatIDFilter,
+            model.mediaMessageIDFilter,
+            model.mediaFilenameQuery,
+            model.mediaTypeFilter,
+            model.mediaFileExtensionFilter
+        ].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private func commitFilenameQuery(_ value: String) {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized != model.mediaFilenameQuery else { return }
+        model.mediaFilenameQuery = normalized
+        scheduleMediaReload()
+    }
+
+    private func commitMediaType(_ value: String) {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized != model.mediaTypeFilter else { return }
+        model.mediaTypeFilter = normalized
+        scheduleMediaReload()
+    }
+
+    private func commitFileExtension(_ value: String) {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .drop(while: { $0 == "." })
+            .lowercased()
+        guard normalized != model.mediaFileExtensionFilter else { return }
+        model.mediaFileExtensionFilter = normalized
+        scheduleMediaReload()
+    }
+
+    private func scheduleMediaReload() {
+        listState.resetVisibleLimit()
+        selection = nil
+        mediaReloadTask?.cancel()
+        mediaReloadTask = Task {
+            await model.loadMediaFiles()
+        }
+    }
+
+    private func resetLocalPresentation() {
+        textFilterResetRevision &+= 1
+        listState = MediaFileListState()
+        selection = nil
+    }
+}
+
+private struct DebouncedMediaTextField: View {
+    var prompt: String
+    @Binding var text: String
+    @Binding var resetRevision: UInt
+    @State private var draft: String
+    @State private var debounceGate = MediaFilenameDebounceGate()
+
+    init(prompt: String, text: Binding<String>, resetRevision: Binding<UInt>) {
+        self.prompt = prompt
+        _text = text
+        _resetRevision = resetRevision
+        _draft = State(initialValue: text.wrappedValue)
+    }
+
+    var body: some View {
+        let taskID = DebouncedMediaTextTaskID(
+            draft: draft,
+            resetRevision: resetRevision
+        )
+
+        TextField(prompt, text: $draft)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit {
+                debounceGate.cancelPending()
+                text = draft
+            }
+            .task(id: taskID) {
+                let ticket = debounceGate.schedule(query: taskID.draft)
+                if !ticket.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    do {
+                        try await Task.sleep(for: .milliseconds(250))
+                    } catch {
+                        return
+                    }
+                }
+                guard !Task.isCancelled,
+                      resetRevision == taskID.resetRevision,
+                      debounceGate.accepts(ticket) else { return }
+                if text != ticket.query {
+                    text = ticket.query
+                }
+            }
+            .onChange(of: text) {
+                debounceGate.cancelPending()
+                if draft != text {
+                    draft = text
+                }
+            }
+            .onChange(of: resetRevision) {
+                debounceGate.cancelPending()
+                draft = text
+            }
+    }
+}
+
+private struct DebouncedMediaTextTaskID: Equatable {
+    var draft: String
+    var resetRevision: UInt
+}
+
+private struct MediaCoreFilterControls: View {
+    @Bindable var model: AppModel
+    var reload: () -> Void
+    var clear: () -> Void
+
+    var body: some View {
+        HStack {
+            TextField("Account", text: $model.mediaAccountFilter)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 180)
+            TextField("Chat ID", text: $model.mediaChatIDFilter)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 130)
+            TextField("Message ID", text: $model.mediaMessageIDFilter)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 130)
+            Button(action: reload) {
+                Label("Reload", systemImage: "arrow.clockwise")
+            }
+            Button(action: clear) {
+                Label("Clear", systemImage: "line.3.horizontal.decrease.circle")
+            }
+        }
+        .disabled(model.isLoading)
+    }
+}
+
+private struct MediaTableRow: Identifiable {
+    var id: CoreMediaFile.ID
+    var filename: String
+    var typeTitle: String
+    var fileExtension: String?
+    var downloadedText: String
+    var accountID: String
+    var chatTitle: String
+    var chatMetadata: String
+    var sizeText: String
+
+    init(file: CoreMediaFile) {
+        self.id = file.id
+        self.filename = file.suggestedFilename
+        self.typeTitle = file.displayType.title
+        self.fileExtension = file.fileExtension
+        self.downloadedText = DisplayFormat.shortDateTime(file.downloadedAt)
+        self.accountID = file.accountID
+        self.chatTitle = file.displayTitle
+        self.chatMetadata = "\(file.chatID) / \(file.messageID)"
+        self.sizeText = file.fileSize.map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        } ?? ""
     }
 }
 
 private struct MediaManagementTable: View {
-    var files: [CoreMediaFile]
+    var rows: [MediaTableRow]
     @Binding var selection: CoreMediaFile.ID?
-    @State private var lastClickedFileID: CoreMediaFile.ID?
 
     var body: some View {
-        Table(files, selection: $selection) {
-            TableColumn("Downloaded") { file in
-                mediaCell(file) {
-                    Text(DisplayFormat.shortDateTime(file.downloadedAt))
+        Table(rows, selection: $selection) {
+            TableColumn("Filename") { row in
+                Text(row.filename)
+                    .lineLimit(1)
+            }
+            .width(min: 170, ideal: 240)
+
+            TableColumn("Type") { row in
+                Text(row.typeTitle)
+            }
+            .width(min: 70, ideal: 90)
+
+            TableColumn("Extension") { row in
+                Text(row.fileExtension.map { ".\($0)" } ?? "—")
+                    .foregroundStyle(row.fileExtension == nil ? .secondary : .primary)
+            }
+            .width(min: 75, ideal: 90)
+
+            TableColumn("Downloaded") { row in
+                Text(row.downloadedText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 120, ideal: 160)
+
+            TableColumn("Account") { row in
+                Text(row.accountID)
+            }
+                .width(min: 90, ideal: 120)
+
+            TableColumn("Chat") { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.chatTitle)
+                        .lineLimit(1)
+                    Text(row.chatMetadata)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            .width(min: 120, ideal: 160)
-
-            TableColumn("Account") { file in
-                mediaCell(file) {
-                    Text(file.accountID)
-                }
-            }
-                .width(min: 90, ideal: 120)
-
-            TableColumn("Chat") { file in
-                mediaCell(file) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(file.displayTitle)
-                            .lineLimit(1)
-                        Text("\(file.chatID) / \(file.messageID)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
             .width(min: 180, ideal: 240)
 
-            TableColumn("Kind") { file in
-                mediaCell(file) {
-                    Text(file.mediaKind ?? file.previewKind ?? "")
-                }
+            TableColumn("Size") { row in
+                Text(row.sizeText)
             }
             .width(min: 80, ideal: 110)
-
-            TableColumn("Size") { file in
-                mediaCell(file) {
-                    Text(file.fileSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "")
-                }
-            }
-            .width(min: 80, ideal: 110)
-
-            TableColumn("Location") { file in
-                mediaCell(file) {
-                    Text(file.filePath ?? file.bestURLString ?? "")
-                        .lineLimit(1)
-                }
-            }
         }
-        .onChange(of: selection) {
-            if selection == nil {
-                lastClickedFileID = nil
-            }
-        }
-    }
-
-    private func mediaCell<Content: View>(_ file: CoreMediaFile, @ViewBuilder content: () -> Content) -> some View {
-        content()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if selection == file.id, lastClickedFileID == file.id {
-                    selection = nil
-                    lastClickedFileID = nil
-                } else {
-                    selection = file.id
-                    lastClickedFileID = file.id
-                }
-            }
     }
 }
 
@@ -168,8 +383,20 @@ private struct MediaDetailPanel: View {
                     GridRow { Text("Chat").foregroundStyle(.secondary); Text("\(file.chatID)") }
                     GridRow { Text("Message").foregroundStyle(.secondary); Text("\(file.messageID)") }
                     GridRow { Text("Index").foregroundStyle(.secondary); Text("\(file.fileIndex)") }
-                    GridRow { Text("Type").foregroundStyle(.secondary); Text(file.contentType ?? file.mimeType ?? file.mediaKind ?? "") }
+                    GridRow { Text("Type").foregroundStyle(.secondary); Text(file.displayType.title) }
+                    GridRow { Text("Extension").foregroundStyle(.secondary); Text(file.fileExtension.map { ".\($0)" } ?? "—") }
+                    GridRow { Text("Content Type").foregroundStyle(.secondary); Text(file.contentType ?? file.mimeType ?? "—") }
                     GridRow { Text("Size").foregroundStyle(.secondary); Text(file.fileSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "") }
+                    if let location = file.filePath ?? file.bestURLString, !location.isEmpty {
+                        GridRow {
+                            Text("Location").foregroundStyle(.secondary)
+                            Text(location)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                                .help(location)
+                        }
+                    }
                 }
                 .font(.callout)
 
@@ -284,7 +511,7 @@ private struct MediaPreviewPanel: View {
                 VStack(spacing: 10) {
                     Image(systemName: "eye.slash.fill")
                         .font(.system(size: 42, weight: .medium))
-                    Text("Preview \(file.mediaKind ?? file.previewKind ?? "media")")
+                    Text("Preview \(file.displayType.title.lowercased())")
                         .font(.headline)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -354,6 +581,6 @@ private enum MediaPreviewSupport {
             "mp3", "m4a", "aac", "wav",
             "pdf"
         ]
-        return supportedExtensions.contains(URL(fileURLWithPath: file.suggestedFilename).pathExtension.lowercased())
+        return file.fileExtension.map(supportedExtensions.contains) ?? false
     }
 }

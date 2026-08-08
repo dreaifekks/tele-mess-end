@@ -21,6 +21,25 @@ private struct CoreSessionContext {
     var client: CoreAPIClient
 }
 
+private struct MediaRequestSnapshot: Equatable {
+    var accountID: String?
+    var chatID: Int?
+    var messageID: Int?
+    var filenameQuery: String
+    var mediaType: String
+    var fileExtension: String
+
+    var hasPresentationFilter: Bool {
+        !filenameQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !mediaType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !fileExtension.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var hasAnyFilter: Bool {
+        accountID != nil || chatID != nil || messageID != nil || hasPresentationFilter
+    }
+}
+
 private struct DailySummaryStateSnapshot {
     var records: [DailySummaryRecord]
     var packageRuns: [DailyPackageRun]
@@ -60,6 +79,7 @@ private enum TokenReadMode {
 private enum OperationScope: Hashable {
     case exclusive
     case messages
+    case media
 }
 
 enum CoreValidationStatus {
@@ -162,6 +182,8 @@ final class AppModel {
     @ObservationIgnored private var activeOperations: [UUID: OperationScope] = [:]
     @ObservationIgnored private var latestOperationIDs: [OperationScope: UUID] = [:]
     @ObservationIgnored private var messageRequestRevision: UInt64 = 0
+    @ObservationIgnored private var mediaRequestRevision: UInt64 = 0
+    @ObservationIgnored private var appliedMediaRequest: MediaRequestSnapshot?
     @ObservationIgnored private var dailySummaryRequestRevision: UInt64 = 0
     @ObservationIgnored private var compatibilityCheckedSessionRevision: UInt64?
     @ObservationIgnored private var localCoreLifecycleRevision: UInt64 = 0
@@ -181,6 +203,8 @@ final class AppModel {
     var participants: [CoreParticipant] = []
     var cursors: [CoreCaptureCursor] = []
     var mediaFiles: [CoreMediaFile] = []
+    private(set) var mediaFilesRevision: UInt64 = 0
+    private(set) var isMediaQueryPending = false
     var operationEvents: [CoreOperationEvent] = []
     var dailySummaryRecords: [DailySummaryRecord] = []
     var dailyPackageRuns: [DailyPackageRun] = []
@@ -219,6 +243,9 @@ final class AppModel {
     var mediaAccountFilter = ""
     var mediaChatIDFilter = ""
     var mediaMessageIDFilter = ""
+    var mediaFilenameQuery = ""
+    var mediaTypeFilter = ""
+    var mediaFileExtensionFilter = ""
     var includeDeletedDailySummaryRecords = false
 
     init(
@@ -876,26 +903,73 @@ final class AppModel {
     }
 
     func loadMediaFiles(allowKeychainUI: Bool = true) async {
+        let requestRevision = beginMediaRequest()
+        let request = MediaRequestSnapshot(
+            accountID: mediaAccountFilter.nilIfEmpty,
+            chatID: Int(mediaChatIDFilter),
+            messageID: Int(mediaMessageIDFilter),
+            filenameQuery: mediaFilenameQuery,
+            mediaType: mediaTypeFilter,
+            fileExtension: mediaFileExtensionFilter
+        )
+        if request != appliedMediaRequest {
+            mediaFiles = []
+            mediaFilesRevision &+= 1
+        }
+        isMediaQueryPending = true
+        defer {
+            if requestRevision == mediaRequestRevision {
+                isMediaQueryPending = false
+            }
+        }
         await withLoading(
             "Loading media",
-            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly,
+            scope: .media,
+            waitForConflicts: true,
+            canStart: { requestRevision == mediaRequestRevision && !Task.isCancelled }
         ) { session in
+            try ensureCurrent(session, mediaRevision: requestRevision)
             let loadedMediaFiles = try await session.client.listMediaFiles(
-                accountID: mediaAccountFilter.nilIfEmpty,
-                chatID: Int(mediaChatIDFilter),
-                messageID: Int(mediaMessageIDFilter),
+                accountID: request.accountID,
+                chatID: request.chatID,
+                messageID: request.messageID,
+                filenameQuery: request.filenameQuery,
+                mediaType: request.mediaType,
+                fileExtension: request.fileExtension,
                 limit: 500
             )
-            try ensureCurrent(session)
+            try ensureCurrent(session, mediaRevision: requestRevision)
+            if request.hasPresentationFilter,
+               loadedMediaFiles.contains(where: { !$0.hasServerMediaFilterMetadata }) {
+                throw CoreAPIError.unsupportedFeature("server-side media filtering")
+            }
             mediaFiles = loadedMediaFiles
-            statusMessage = "Loaded \(mediaFiles.count) media files"
+            mediaFilesRevision &+= 1
+            appliedMediaRequest = request
+            let qualifier = request.hasAnyFilter ? " matching" : ""
+            statusMessage = mediaFiles.count == 500
+                ? "Loaded 500\(qualifier) media files (result cap reached)"
+                : "Loaded \(mediaFiles.count)\(qualifier) media files"
         }
+    }
+
+    func clearMediaFilters() {
+        mediaAccountFilter = ""
+        mediaChatIDFilter = ""
+        mediaMessageIDFilter = ""
+        mediaFilenameQuery = ""
+        mediaTypeFilter = ""
+        mediaFileExtensionFilter = ""
     }
 
     func showMedia(for message: CoreMessage) {
         mediaAccountFilter = message.accountID
         mediaChatIDFilter = String(message.chatID)
         mediaMessageIDFilter = String(message.messageID)
+        mediaFilenameQuery = ""
+        mediaTypeFilter = ""
+        mediaFileExtensionFilter = ""
         selectedSection = .media
     }
 
@@ -1542,6 +1616,7 @@ final class AppModel {
     private func beginProfileSession() {
         sessionRevision &+= 1
         messageRequestRevision &+= 1
+        mediaRequestRevision &+= 1
         dailySummaryRequestRevision &+= 1
         compatibilityCheckedSessionRevision = nil
         tokenCache = nil
@@ -1566,6 +1641,9 @@ final class AppModel {
         participants = []
         cursors = []
         mediaFiles = []
+        mediaFilesRevision &+= 1
+        isMediaQueryPending = false
+        appliedMediaRequest = nil
         operationEvents = []
         dailySummaryRecords = []
         dailyPackageRuns = []
@@ -1591,6 +1669,9 @@ final class AppModel {
         mediaAccountFilter = ""
         mediaChatIDFilter = ""
         mediaMessageIDFilter = ""
+        mediaFilenameQuery = ""
+        mediaTypeFilter = ""
+        mediaFileExtensionFilter = ""
         includeDeletedDailySummaryRecords = false
     }
 
@@ -1690,7 +1771,7 @@ final class AppModel {
                     )
                 case .httpStatus(let status, _) where (400..<500).contains(status):
                     return .failed("The local Core readiness check failed with HTTP status \(status).")
-                case .invalidResponse, .httpStatus, .transport, .missingProfile:
+                case .invalidResponse, .httpStatus, .transport, .missingProfile, .unsupportedFeature:
                     break
                 }
             } catch {
@@ -1773,6 +1854,18 @@ final class AppModel {
     private func ensureCurrent(_ session: CoreSessionContext, messageRevision: UInt64) throws {
         try ensureCurrent(session)
         guard messageRevision == messageRequestRevision else {
+            throw CancellationError()
+        }
+    }
+
+    private func beginMediaRequest() -> UInt64 {
+        mediaRequestRevision &+= 1
+        return mediaRequestRevision
+    }
+
+    private func ensureCurrent(_ session: CoreSessionContext, mediaRevision: UInt64) throws {
+        try ensureCurrent(session)
+        guard mediaRevision == mediaRequestRevision else {
             throw CancellationError()
         }
     }
@@ -2021,18 +2114,46 @@ final class AppModel {
         _ action: String,
         tokenReadMode: TokenReadMode = .promptIfNeeded,
         scope: OperationScope = .exclusive,
+        waitForConflicts: Bool = false,
+        canStart: () -> Bool = { true },
         operation: (CoreSessionContext) async throws -> Void
     ) async -> Bool {
         let operationID = UUID()
         let startingGeneration = sessionRevision
-        if !activeOperations.isEmpty {
-            guard scope == .messages,
-                  activeOperations.values.allSatisfy({ $0 == .messages }) else {
+        while !activeOperations.isEmpty {
+            guard canStart() else {
+                runtimeLogger.debug("Operation skipped action=\(action) reason=superseded_while_waiting")
+                return false
+            }
+            let allowsSameScopeOverlap = scope == .messages || scope == .media
+            if allowsSameScopeOverlap,
+               activeOperations.values.allSatisfy({ $0 == scope }) {
+                break
+            }
+            guard waitForConflicts else {
                 runtimeLogger.debug("Operation skipped action=\(action) reason=busy")
                 return false
             }
+            do {
+                try await Task.sleep(for: .milliseconds(25))
+            } catch {
+                runtimeLogger.debug("Operation skipped action=\(action) reason=cancelled_while_waiting")
+                return false
+            }
         }
-        let scopeLabel = scope == .messages ? "messages" : "exclusive"
+        guard canStart() else {
+            runtimeLogger.debug("Operation skipped action=\(action) reason=superseded_before_start")
+            return false
+        }
+        let scopeLabel: String
+        switch scope {
+        case .exclusive:
+            scopeLabel = "exclusive"
+        case .messages:
+            scopeLabel = "messages"
+        case .media:
+            scopeLabel = "media"
+        }
         runtimeLogger.info("Operation begin action=\(action) scope=\(scopeLabel)")
         activeOperations[operationID] = scope
         latestOperationIDs[scope] = operationID
@@ -2083,6 +2204,8 @@ final class AppModel {
                 return "missing_profile"
             case .missingToken:
                 return "missing_token"
+            case .unsupportedFeature:
+                return "unsupported_feature"
             case .transport:
                 return "transport_error"
             }

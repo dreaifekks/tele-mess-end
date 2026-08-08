@@ -565,7 +565,15 @@ struct CoreAPIClient: Sendable {
         return response.item
     }
 
-    func listMediaFiles(accountID: String? = nil, chatID: Int? = nil, messageID: Int? = nil, limit: Int = 500) async throws -> [CoreMediaFile] {
+    func listMediaFiles(
+        accountID: String? = nil,
+        chatID: Int? = nil,
+        messageID: Int? = nil,
+        filenameQuery: String? = nil,
+        mediaType: String? = nil,
+        fileExtension: String? = nil,
+        limit: Int = 500
+    ) async throws -> [CoreMediaFile] {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
         if let accountID, !accountID.isEmpty {
             query.append(URLQueryItem(name: "account_id", value: accountID))
@@ -575,6 +583,23 @@ struct CoreAPIClient: Sendable {
         }
         if let messageID {
             query.append(URLQueryItem(name: "message_id", value: String(messageID)))
+        }
+        if let filenameQuery = filenameQuery?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !filenameQuery.isEmpty {
+            query.append(URLQueryItem(name: "filename_query", value: filenameQuery))
+        }
+        if let mediaType = mediaType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !mediaType.isEmpty {
+            query.append(URLQueryItem(name: "media_type", value: mediaType))
+        }
+        if let fileExtension {
+            let normalizedExtension = fileExtension
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .drop(while: { $0 == "." })
+                .lowercased()
+            if !normalizedExtension.isEmpty {
+                query.append(URLQueryItem(name: "file_extension", value: normalizedExtension))
+            }
         }
         let response: CoreItemsResponse<CoreMediaFile> = try await send("GET", path: "/sync/media-files", query: query)
         return response.items

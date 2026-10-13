@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+  # Manual runs build, sign, and notarize the DMG but only store it as a
+  # workflow artifact; they never touch a GitHub Release.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,6 +29,7 @@ jobs:
         run: swift --version
 
       - name: Validate release tag
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -41,9 +45,71 @@ jobs:
         shell: bash
         run: ./script/verify.sh
 
+      - name: Import Developer ID certificate
+        shell: bash
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$MACOS_SIGNING_P12" ]]; then
+            echo "::notice::MACOS_SIGNING_P12 is not set; the DMG will be ad-hoc signed"
+            exit 0
+          fi
+
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          certificate="$RUNNER_TEMP/signing.p12"
+
+          printf '%s' "$MACOS_SIGNING_P12" | base64 --decode >"$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "$MACOS_SIGNING_PASSWORD" -f pkcs12 \
+            -k "$keychain" -T /usr/bin/codesign
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$keychain_password" "$keychain" >/dev/null
+
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | grep '"Developer ID Application: ' | head -n 1 | awk '{print $2}' || true)"
+          if [[ -z "$identity" ]]; then
+            echo "::error::MACOS_SIGNING_P12 does not contain a Developer ID Application identity"
+            exit 1
+          fi
+
+          echo "CODESIGN_IDENTITY=$identity" >>"$GITHUB_ENV"
+
       - name: Build DMG
         shell: bash
-        run: ./script/package_macos.sh
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          signing="ad-hoc"
+          if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+            signing="developer-id"
+            if [[ -n "$APPLE_API_KEY_P8_BASE64" ]]; then
+              signing="notarized"
+              export NOTARIZE=1
+            else
+              echo "::notice::APPLE_API_KEY_P8_BASE64 is not set; the DMG will not be notarized"
+            fi
+          else
+            # Never pick up an identity that happens to exist on the runner.
+            export CODESIGN_IDENTITY=-
+          fi
+
+          echo "RELEASE_SIGNING=$signing" >>"$GITHUB_ENV"
+          ./script/package_macos.sh
 
       - name: Verify DMG
         shell: bash
@@ -60,7 +126,21 @@ jobs:
 
           hdiutil verify "${artifacts[0]}"
 
+          if [[ "$RELEASE_SIGNING" == "notarized" ]]; then
+            spctl --assess --type open --context context:primary-signature -vv "${artifacts[0]}"
+          fi
+
+      - name: Upload DMG artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeleMessEnd-dmg-${{ github.sha }}
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Create or update GitHub Release
+        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,7 +160,17 @@ jobs:
           {
             printf '%s\n' "Automated macOS DMG build."
             printf '\n'
-            printf '%s\n' "This build is ad-hoc signed and not notarized. macOS Gatekeeper may require right-click Open or approval in Privacy & Security."
+            case "$RELEASE_SIGNING" in
+              notarized)
+                printf '%s\n' "This build is signed with a Developer ID certificate and notarized by Apple."
+                ;;
+              developer-id)
+                printf '%s\n' "This build is signed with a Developer ID certificate but not notarized. macOS Gatekeeper may require right-click Open or approval in Privacy & Security."
+                ;;
+              *)
+                printf '%s\n' "This build is ad-hoc signed and not notarized. macOS Gatekeeper may require right-click Open or approval in Privacy & Security."
+                ;;
+            esac
           } >"$notes_file"
 
           if gh release view "$tag" >/dev/null 2>&1; then

@@ -93,15 +93,25 @@ Build a local DMG for testing:
 ./script/package_macos.sh
 ```
 
-Without `CODESIGN_IDENTITY`, the package script uses ad-hoc signing and is only
-intended for local install-flow testing. For Developer ID packaging, run it with
-your signing identity:
+Both scripts sign with the first `Developer ID Application` identity found in
+the keychain, so rebuilt apps keep one signing identity and stored Keychain
+tokens stay readable. When no such identity exists they fall back to ad-hoc
+signing, which is only intended for local testing. Override the choice with
+`CODESIGN_IDENTITY`:
 
 ```bash
 CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./script/package_macos.sh
+CODESIGN_IDENTITY=- ./script/build_and_run.sh   # force ad-hoc
 ```
 
-Set `NOTARIZE=1` plus notarization credentials to submit and staple the DMG.
+To notarize and staple the DMG locally, store notarization credentials once and
+pass the profile name:
+
+```bash
+xcrun notarytool store-credentials tele-mess-end-notary \
+  --key /path/to/AuthKey_KEYID.p8 --key-id KEYID --issuer ISSUER_UUID
+NOTARIZE=1 NOTARYTOOL_KEYCHAIN_PROFILE=tele-mess-end-notary ./script/package_macos.sh
+```
 
 Publish a GitHub Release DMG by pushing a version tag that matches `VERSION`:
 
@@ -111,9 +121,27 @@ git push origin "v$(tr -d '[:space:]' < VERSION)"
 ```
 
 The release workflow runs on a GitHub-hosted macOS runner, builds the DMG, and
-uploads it to the matching GitHub Release. Until Developer ID signing is
-configured, that DMG is ad-hoc signed and macOS Gatekeeper will warn on first
-open.
+uploads it to the matching GitHub Release. It reads these repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `MACOS_SIGNING_P12` | Base64 of the Developer ID Application `.p12`, including the intermediate chain |
+| `MACOS_SIGNING_PASSWORD` | Password of that `.p12` |
+| `APPLE_API_KEY_P8_BASE64` | Base64 of the App Store Connect API key used for notarization |
+| `APPLE_API_KEY_ID` | Key ID of that API key |
+| `APPLE_API_ISSUER_ID` | Issuer ID of that API key |
+
+With the signing secrets the DMG is Developer ID signed, and with the API key
+secrets it is also notarized and stapled. Without them the DMG is ad-hoc signed
+and macOS Gatekeeper will warn on first open. The release notes state which of
+the three applies.
+
+To check signing and notarization without publishing, run the workflow manually.
+A manual run stores the DMG as a workflow artifact and leaves Releases alone:
+
+```bash
+gh workflow run release-macos.yml --ref master
+```
 
 Run the complete local verification gate used by CI and releases:
 

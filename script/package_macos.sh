@@ -52,8 +52,11 @@ require_macos_tool /usr/bin/codesign
 require_macos_tool /usr/bin/hdiutil
 require_macos_tool /usr/bin/ditto
 
-if [[ "$NOTARIZE" == "1" && -z "${CODESIGN_IDENTITY:-}" ]]; then
-  fail "NOTARIZE=1 requires CODESIGN_IDENTITY"
+source "$ROOT_DIR/script/lib/codesign_identity.sh"
+resolve_codesign_identity
+
+if [[ "$NOTARIZE" == "1" && -z "$CODESIGN_IDENTITY" ]]; then
+  fail "NOTARIZE=1 requires a Developer ID signing identity"
 fi
 
 log "building $APP_NAME $APP_VERSION ($CONFIGURATION)"
@@ -102,8 +105,8 @@ if command -v /usr/bin/xattr >/dev/null 2>&1; then
   /usr/bin/xattr -cr "$APP_BUNDLE"
 fi
 
-log "signing app bundle"
-if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+log "signing app bundle with $CODESIGN_IDENTITY_NAME"
+if [[ -n "$CODESIGN_IDENTITY" ]]; then
   codesign_args=(--force --sign "$CODESIGN_IDENTITY" --timestamp)
   if [[ "${CODESIGN_HARDENED_RUNTIME:-1}" == "1" ]]; then
     codesign_args+=(--options runtime)
@@ -113,7 +116,7 @@ if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   fi
   /usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
 else
-  log "CODESIGN_IDENTITY is not set; using ad-hoc signing for local testing"
+  log "using ad-hoc signing without a Developer ID identity; for local testing only"
   /usr/bin/codesign --force --sign - "$APP_BUNDLE"
 fi
 
@@ -143,7 +146,7 @@ ln -s /Applications "$DMG_STAGE/Applications"
   -format UDZO \
   "$DMG_PATH"
 
-if [[ -n "${CODESIGN_IDENTITY:-}" && "$SIGN_DMG" == "1" ]]; then
+if [[ -n "$CODESIGN_IDENTITY" && "$SIGN_DMG" == "1" ]]; then
   log "signing dmg"
   /usr/bin/codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$DMG_PATH"
   /usr/bin/codesign --verify --verbose=4 "$DMG_PATH"

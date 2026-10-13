@@ -60,7 +60,11 @@ if command -v /usr/bin/xattr >/dev/null 2>&1; then
   /usr/bin/xattr -cr "$APP_BUNDLE"
 fi
 
-if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+source "$ROOT_DIR/script/lib/codesign_identity.sh"
+resolve_codesign_identity
+
+if [[ -n "$CODESIGN_IDENTITY" ]]; then
+  echo "signing with $CODESIGN_IDENTITY_NAME" >&2
   codesign_args=(--force --sign "$CODESIGN_IDENTITY")
   if [[ "${CODESIGN_HARDENED_RUNTIME:-0}" == "1" ]]; then
     codesign_args+=(--options runtime)
@@ -73,7 +77,7 @@ if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   fi
   /usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
 else
-  echo "warning: using ad-hoc signing; Keychain credentials may require replacement after rebuilds" >&2
+  echo "warning: using ad-hoc signing without a Developer ID identity; Keychain credentials may require replacement after rebuilds" >&2
   /usr/bin/codesign --force --sign - "$APP_BUNDLE"
 fi
 

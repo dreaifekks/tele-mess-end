@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CODESIGN_HARDENED_RUNTIME="${CODESIGN_HARDENED_RUNTIME:-1}"
+
 APP_NAME="${APP_NAME:-TeleMessEnd}"
 BUNDLE_ID="${BUNDLE_ID:-com.dreaifekks.TeleMessEnd}"
 MIN_SYSTEM_VERSION="${MIN_SYSTEM_VERSION:-14.0}"
@@ -92,6 +94,14 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>https://github.com/dreaifekks/tele-mess-end/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>FDJW/5fpkDzeTknaXgZmLnoPftP/Pxk3kj17j2zgpFM=</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>86400</integer>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>
@@ -105,22 +115,11 @@ if command -v /usr/bin/xattr >/dev/null 2>&1; then
   /usr/bin/xattr -cr "$APP_BUNDLE"
 fi
 
+source "$ROOT_DIR/script/lib/sparkle_bundle.sh"
+embed_sparkle
 log "signing app bundle with $CODESIGN_IDENTITY_NAME"
-if [[ -n "$CODESIGN_IDENTITY" ]]; then
-  codesign_args=(--force --sign "$CODESIGN_IDENTITY" --timestamp)
-  if [[ "${CODESIGN_HARDENED_RUNTIME:-1}" == "1" ]]; then
-    codesign_args+=(--options runtime)
-  fi
-  if [[ -n "${CODESIGN_ENTITLEMENTS:-}" ]]; then
-    codesign_args+=(--entitlements "$CODESIGN_ENTITLEMENTS")
-  fi
-  /usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
-else
-  log "using ad-hoc signing without a Developer ID identity; for local testing only"
-  /usr/bin/codesign --force --sign - "$APP_BUNDLE"
-fi
-
-/usr/bin/codesign --verify --strict --verbose=4 "$APP_BUNDLE"
+sign_app_with_sparkle
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 log "creating dmg"
 mkdir -p "$DIST_DIR"

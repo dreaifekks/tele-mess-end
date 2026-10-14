@@ -126,6 +126,24 @@ jobs:
 
           hdiutil verify "${artifacts[0]}"
 
+      - name: Generate signed Sparkle appcast
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SPARKLE_PRIVATE_KEY:?SPARKLE_PRIVATE_KEY must contain the exported EdDSA key}"
+          umask 077
+          key_file="$(mktemp "$RUNNER_TEMP/sparkle-key.XXXXXX")"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" >"$key_file"
+          .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+            --ed-key-file "$key_file" \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            --maximum-deltas 0 \
+            -o dist/appcast.xml dist
+
       - name: Upload DMG artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
@@ -152,6 +170,8 @@ jobs:
             echo "::error::Expected exactly one DMG in dist, found ${#artifacts[@]}"
             exit 1
           fi
+
+          artifacts+=(dist/appcast.xml)
 
           {
             printf '%s\n' "Automated macOS DMG build."

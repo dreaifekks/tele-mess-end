@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CODESIGN_HARDENED_RUNTIME="${CODESIGN_HARDENED_RUNTIME:-0}"
+
 MODE="${1:-run}"
 APP_NAME="TeleMessEnd"
 BUNDLE_ID="com.dreaifekks.TeleMessEnd"
@@ -47,6 +49,14 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>https://github.com/dreaifekks/tele-mess-end/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>FDJW/5fpkDzeTknaXgZmLnoPftP/Pxk3kj17j2zgpFM=</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>86400</integer>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>
@@ -63,32 +73,16 @@ fi
 source "$ROOT_DIR/script/lib/codesign_identity.sh"
 resolve_codesign_identity
 
-if [[ -n "$CODESIGN_IDENTITY" ]]; then
-  echo "signing with $CODESIGN_IDENTITY_NAME" >&2
-  codesign_args=(--force --sign "$CODESIGN_IDENTITY")
-  if [[ "${CODESIGN_HARDENED_RUNTIME:-0}" == "1" ]]; then
-    codesign_args+=(--options runtime)
-  fi
-  if [[ -n "${CODESIGN_ENTITLEMENTS:-}" ]]; then
-    codesign_args+=(--entitlements "$CODESIGN_ENTITLEMENTS")
-  fi
-  if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then
-    codesign_args+=(--keychain "$CODESIGN_KEYCHAIN")
-  fi
-  /usr/bin/codesign "${codesign_args[@]}" "$APP_BUNDLE"
-else
-  echo "warning: using ad-hoc signing without a Developer ID identity; Keychain credentials may require replacement after rebuilds" >&2
-  /usr/bin/codesign --force --sign - "$APP_BUNDLE"
-fi
+source "$ROOT_DIR/script/lib/sparkle_bundle.sh"
+embed_sparkle
+echo "signing with $CODESIGN_IDENTITY_NAME" >&2
+sign_app_with_sparkle
 
 verify_signature() {
   if command -v /usr/bin/xattr >/dev/null 2>&1; then
     /usr/bin/xattr -cr "$APP_BUNDLE"
   fi
-  # The workspace can be FileProvider-backed, which may immediately attach
-  # FinderInfo to a launched bundle. Verify the live local signature without
-  # treating that external metadata as signed content. Packaging remains strict.
-  /usr/bin/codesign --verify --verbose=4 "$APP_BUNDLE"
+  /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 }
 
 verify_signature

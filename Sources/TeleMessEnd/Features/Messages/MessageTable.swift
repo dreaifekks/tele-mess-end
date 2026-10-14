@@ -49,9 +49,10 @@ struct MessageTable: View {
                                 showMedia?(message)
                             } label: {
                                 Label(mediaLabel(for: message), systemImage: "paperclip")
+                                    .labelStyle(.iconOnly)
                             }
                             .buttonStyle(.borderless)
-                            .help("Show media files")
+                            .help(mediaLabel(for: message))
                         } else {
                             Text("")
                         }
@@ -66,7 +67,7 @@ struct MessageTable: View {
                         }
                     }
                 }
-                .width(min: 65, ideal: 80, max: 100)
+                .width(min: 50, ideal: 60, max: 70)
             }
             .frame(minHeight: tableMinHeight)
 

@@ -3,6 +3,7 @@ import SwiftUI
 struct OperationEventsTable: View {
     var events: [CoreOperationEvent]
     @Binding var selection: CoreOperationEvent.ID?
+    var isLoading = false
     var requestDelete: ((CoreOperationEvent) -> Void)? = nil
 
     var body: some View {
@@ -18,6 +19,7 @@ struct OperationEventsTable: View {
                             .foregroundStyle(.red)
                     }
                     .buttonStyle(.borderless)
+                    .disabled(isLoading)
                 }
                 .width(min: 54, ideal: 64, max: 72)
             }

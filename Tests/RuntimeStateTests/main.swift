@@ -159,7 +159,42 @@ enum RuntimeStateTests {
         await runner.run("busy validation waits without false failure") {
             try await busyValidationDoesNotFail()
         }
+        await runner.run("exclusive operations queue instead of dropping clicks") {
+            try await queuedOperations(staleSession: false, cancelled: false)
+        }
+        await runner.run("queued operations do not cross profile sessions") {
+            try await queuedOperations(staleSession: true, cancelled: false)
+        }
+        await runner.run("cancelled queued operations do not start") {
+            try await queuedOperations(staleSession: false, cancelled: true)
+        }
         runner.finish()
+    }
+
+    @MainActor
+    private static func queuedOperations(staleSession: Bool, cancelled: Bool) async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let transport = QueuedAccountsTransport()
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: transport
+        )
+        let first = Task { await model.loadAccounts(allowKeychainUI: false) }
+        while await transport.count == 0 { await Task.yield() }
+        let second = Task { await model.loadAccounts(allowKeychainUI: false) }
+        try await Task.sleep(for: .milliseconds(20))
+        try expectEqual(await transport.count, 1)
+        if staleSession { _ = model.addRemoteProfile() }
+        if cancelled { second.cancel() }
+        await transport.releaseFirst()
+        await first.value
+        await second.value
+        try expectEqual(await transport.count, staleSession || cancelled ? 1 : 2)
+        try expectEqual(model.isLoading, false)
+        try expectNil(model.lastError)
     }
 
     @MainActor
@@ -1725,6 +1760,7 @@ enum RuntimeStateTests {
         try expectEqual(model.selectedSection, .dashboard)
         try expectEqual(model.availableSections, [.dashboard, .accounts])
         try expectEqual(model.dashboard.coreState?.databaseID, "db")
+        try expectEqual(model.validationStatus.title, "Verified")
     }
 
     @MainActor
@@ -2381,5 +2417,23 @@ private enum RuntimeTestError: Error, CustomStringConvertible {
         case .failure(let message):
             message
         }
+    }
+}
+
+private actor QueuedAccountsTransport: CoreHTTPTransport {
+    private(set) var count = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func releaseFirst() {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        count += 1
+        if count == 1 {
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return try response(for: request, json: #"{"items": []}"#)
     }
 }

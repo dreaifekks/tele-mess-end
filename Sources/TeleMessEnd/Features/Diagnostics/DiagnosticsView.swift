@@ -50,14 +50,13 @@ struct DiagnosticsView: View {
                 } label: {
                     Label("Refresh Participants", systemImage: "person.2.badge.gearshape")
                 }
-                .disabled(model.diagnosticsAccountFilter.isEmpty || Int(model.diagnosticsOriginIDFilter) == nil)
+                .disabled(model.isLoading || model.diagnosticsAccountFilter.isEmpty || Int(model.diagnosticsOriginIDFilter) == nil)
             }
 
             content
         }
         .padding(20)
         .navigationTitle("Diagnostics")
-        .disabled(model.isLoading)
         .task(id: DiagnosticsLoadKey(sessionRevision: model.sessionRevision, section: model.diagnosticsSelection)) {
             clearDetailSelection()
             pendingDeleteOperationEvent = nil
@@ -80,6 +79,7 @@ struct DiagnosticsView: View {
                 }
                 pendingDeleteOperationEvent = nil
             }
+            .disabled(model.isLoading)
             Button("Cancel", role: .cancel) {
                 pendingDeleteOperationEvent = nil
             }
@@ -106,7 +106,7 @@ struct DiagnosticsView: View {
             if model.operationEvents.isEmpty {
                 EmptyStateView(title: "No operation events", detail: "Failed, partial, and rate-limited core operations appear here.", systemImage: "exclamationmark.triangle")
             } else {
-                OperationEventsTable(events: model.operationEvents, selection: $selectedOperationEventID) { event in
+                OperationEventsTable(events: model.operationEvents, selection: $selectedOperationEventID, isLoading: model.isLoading) { event in
                     pendingDeleteOperationEvent = event
                 }
             }

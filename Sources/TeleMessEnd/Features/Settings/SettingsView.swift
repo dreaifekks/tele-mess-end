@@ -153,13 +153,13 @@ struct SettingsView: View {
                     }
                     .disabled(profileEditingIsLocked)
 
-                    if let error = model.lastError {
+                    if let error = model.validationError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
                             .font(.callout)
                             .textSelection(.enabled)
-                    } else if model.statusMessage != "Ready" {
-                        Label(model.statusMessage, systemImage: "checkmark.circle")
+                    } else if model.validationStatus != .unverified {
+                        Label(model.validationStatus.title, systemImage: model.validationStatus.systemImage)
                             .foregroundStyle(.secondary)
                             .font(.callout)
                     }

@@ -9,18 +9,18 @@ struct OriginsView: View {
     @State private var managedSelection = Set<CoreOrigin.ID>()
     @State private var sortOrder: [KeyPathComparator<CoreOrigin>] = []
     @State private var lastClickedOriginID: CoreOrigin.ID?
-    private let inlineInspectorMinimumWidth: CGFloat = 1120
 
     var body: some View {
-        GeometryReader { proxy in
-            if proxy.size.width >= inlineInspectorMinimumWidth {
-                wideLayout
-            } else {
-                compactLayout(containerWidth: proxy.size.width)
+        VStack(alignment: .leading, spacing: 14) {
+            filters.fixedSize(horizontal: false, vertical: true)
+            AdaptiveDetailLayout(hasDetail: !inspectorOrigins.isEmpty) {
+                originsTable
+            } detail: {
+                OriginInspectorView(model: model, selectedOrigins: inspectorOrigins)
             }
         }
+        .padding(20)
         .navigationTitle("Origins")
-        .disabled(model.isLoading)
         .task(id: model.sessionRevision) {
             resetForSession()
         }
@@ -29,12 +29,20 @@ struct OriginsView: View {
         }
         .onChange(of: manageMode) {
             if manageMode {
-                if let selected = model.selectedOriginID {
+                managedSelection.formIntersection(Set(originRows.map(\.id)))
+                if let selected = model.selectedOriginID, originRows.contains(where: { $0.id == selected }) {
                     managedSelection = [selected]
                 }
             } else {
                 model.selectedOriginID = managedSelection.first ?? model.selectedOriginID
                 managedSelection.removeAll()
+            }
+        }
+        .onChange(of: originRows.map(\.id)) {
+            let visibleIDs = Set(originRows.map(\.id))
+            managedSelection.formIntersection(visibleIDs)
+            if let selected = model.selectedOriginID, !visibleIDs.contains(selected) {
+                model.selectedOriginID = nil
             }
         }
         .onChange(of: managedSelection) {
@@ -50,50 +58,6 @@ struct OriginsView: View {
         managedSelection.removeAll()
         sortOrder = []
         lastClickedOriginID = nil
-    }
-
-    private var mainContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            filters
-            originsTable
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var wideLayout: some View {
-        HSplitView {
-            mainContent
-
-            OriginInspectorView(model: model, selectedOrigins: inspectorOrigins)
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
-        }
-    }
-
-    private func compactLayout(containerWidth: CGFloat) -> some View {
-        ZStack(alignment: .trailing) {
-            mainContent
-
-            if !inspectorOrigins.isEmpty {
-                OriginInspectorView(model: model, selectedOrigins: inspectorOrigins, isOverlayPanel: true)
-                    .frame(width: compactInspectorWidth(containerWidth: containerWidth))
-                    .frame(maxHeight: .infinity)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color(nsColor: .separatorColor))
-                            .frame(width: 1)
-                            .frame(maxHeight: .infinity)
-                            .allowsHitTesting(false)
-                    }
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .zIndex(2)
-            }
-        }
-        .animation(.easeInOut(duration: 0.16), value: inspectorOrigins.map(\.id))
-    }
-
-    private func compactInspectorWidth(containerWidth: CGFloat) -> CGFloat {
-        min(360, max(300, containerWidth * 0.36))
     }
 
     private var filters: some View {
@@ -118,6 +82,8 @@ struct OriginsView: View {
                     Text("Unknown").tag("unknown")
                 }
                 .frame(width: 150)
+            }
+            HStack {
                 Picker("Backup", selection: $model.originBackupFilter) {
                     ForEach(OriginBackupFilter.allCases) { filter in
                         Text(filter.title).tag(filter)
@@ -147,7 +113,7 @@ struct OriginsView: View {
                 } label: {
                     Label("Discover", systemImage: "sparkle.magnifyingglass")
                 }
-                .disabled(model.originAccountFilter.isEmpty)
+                .disabled(model.isLoading || model.originAccountFilter.isEmpty)
                 Spacer()
                 Toggle("Manage", isOn: $manageMode)
                     .toggleStyle(.button)
@@ -307,9 +273,7 @@ struct OriginsView: View {
 
     private var inspectorOrigins: [CoreOrigin] {
         if manageMode {
-            return managedSelection.compactMap { id in
-                model.origins.first { $0.id == id }
-            }
+            return originRows.filter { managedSelection.contains($0.id) }
         }
         if let origin = model.selectedOrigin {
             return [origin]
@@ -414,7 +378,6 @@ private struct OriginGroup {
 private struct OriginInspectorView: View {
     @Bindable var model: AppModel
     var selectedOrigins: [CoreOrigin]
-    var isOverlayPanel = false
     @State private var enabled = false
     @State private var captureText = true
     @State private var captureMediaMetadata = true
@@ -441,13 +404,7 @@ private struct OriginInspectorView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .scrollIndicators(.automatic)
-        .background {
-            if isOverlayPanel {
-                Color(nsColor: .windowBackgroundColor)
-            } else {
-                Rectangle().fill(.regularMaterial)
-            }
-        }
+        .background(.regularMaterial)
         .onChange(of: selectedOriginIDs) {
             syncPolicy()
         }
@@ -467,11 +424,13 @@ private struct OriginInspectorView: View {
                 } label: {
                     Label("Archive", systemImage: "archivebox")
                 }
+                .disabled(model.isLoading)
                 Button {
                     Task { await model.archiveOrigins(selectedOrigins, archived: false) }
                 } label: {
                     Label("Restore", systemImage: "arrow.uturn.backward")
                 }
+                .disabled(model.isLoading)
             }
         }
     }
@@ -511,6 +470,7 @@ private struct OriginInspectorView: View {
                     }
                 }
             ))
+            .disabled(model.isLoading)
 
             Divider()
 
@@ -548,11 +508,13 @@ private struct OriginInspectorView: View {
                 } label: {
                     Label("Save Policy", systemImage: "checkmark")
                 }
+                .disabled(model.isLoading)
                 Button {
                     Task { await model.archiveOrigins([origin], archived: !origin.isArchived) }
                 } label: {
                     Label(origin.isArchived ? "Restore" : "Archive", systemImage: origin.isArchived ? "arrow.uturn.backward" : "archivebox")
                 }
+                .disabled(model.isLoading)
             }
         }
     }

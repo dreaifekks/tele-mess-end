@@ -10,10 +10,9 @@ struct MessagePointsView: View {
     ]
 
     var body: some View {
-        HSplitView {
-            VStack(alignment: .leading, spacing: 14) {
-                filters
-
+        VStack(alignment: .leading, spacing: 14) {
+            filters.fixedSize(horizontal: false, vertical: true)
+            AdaptiveDetailLayout(hasDetail: selectedPoint != nil) {
                 if model.dailyMessagePoints.isEmpty {
                     EmptyStateView(
                         title: "No message points",
@@ -23,17 +22,12 @@ struct MessagePointsView: View {
                 } else {
                     pointsTable
                 }
+            } detail: {
+                MessagePointDetailPanel(model: model, point: selectedPoint)
             }
-            .padding(20)
-            .frame(minWidth: 700, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            MessagePointDetailPanel(model: model, point: selectedPoint)
-                .frame(width: 420)
-                .frame(maxHeight: .infinity)
-                .padding(.leading, 12)
         }
+        .padding(20)
         .navigationTitle("Message Points")
-        .disabled(model.isLoading)
         .task(id: model.sessionRevision) {
             selection = nil
             loadedDetailIDs.removeAll()
@@ -102,6 +96,8 @@ struct MessagePointsView: View {
                 .pickerStyle(.menu)
                 .frame(width: 118)
 
+            }
+            HStack(spacing: 10) {
                 Picker("Origin", selection: $model.messagePointOriginImportanceFilter) {
                     ForEach(MessagePointOriginImportanceFilter.allCases) { filter in
                         Text(filter.title).tag(filter)
@@ -238,13 +234,6 @@ private struct MessagePointDetailPanel: View {
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-            } else {
-                EmptyStateView(
-                    title: "Select a message point",
-                    detail: "Pick a completed point to inspect its persisted content, importance, links, and source references.",
-                    systemImage: "doc.text.magnifyingglass"
-                )
-                .padding(20)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

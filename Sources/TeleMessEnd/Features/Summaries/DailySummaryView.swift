@@ -28,7 +28,6 @@ struct DailySummaryView: View {
         }
         .padding(20)
         .navigationTitle("Daily Summary")
-        .disabled(model.isLoading)
         .task(id: model.sessionRevision) {
             resetForSession()
         }
@@ -61,6 +60,7 @@ struct DailySummaryView: View {
             Button("Delete", role: .destructive) {
                 deletePendingRecords()
             }
+            .disabled(model.isLoading)
             Button("Cancel", role: .cancel) {
                 pendingDeleteRecords = []
             }
@@ -96,13 +96,14 @@ struct DailySummaryView: View {
                 } label: {
                     Label("Run Analysis", systemImage: "play.circle")
                 }
-                .disabled(model.activeDailySummaryJob != nil)
+                .disabled(model.isLoading || model.activeDailySummaryJob != nil)
                 if let activeJob = model.activeDailySummaryJob {
                     Button {
                         Task { await model.cancelDailySummaryJob(activeJob) }
                     } label: {
                         Label("Cancel", systemImage: "xmark.circle")
                     }
+                    .disabled(model.isLoading)
                 }
                 Button {
                     Task { await model.refreshDailySummaryProgress() }
@@ -140,6 +141,7 @@ struct DailySummaryView: View {
                         } label: {
                             Label("Restore", systemImage: "arrow.uturn.backward")
                         }
+                        .disabled(model.isLoading)
                     }
                     if !selectedActiveRecords.isEmpty {
                         Button(role: .destructive) {
@@ -147,6 +149,7 @@ struct DailySummaryView: View {
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .disabled(model.isLoading)
                     }
                 }
             }
@@ -182,10 +185,9 @@ struct DailySummaryView: View {
                     onRestore: restoreSelectedRecords
                 )
             } else {
-                HSplitView {
+                AdaptiveDetailLayout(hasDetail: selectedRecord != nil) {
                     summaryRecordsTable
-                        .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity)
-
+                } detail: {
                     SummaryRecordDetailPanel(
                         model: model,
                         record: selectedRecord,
@@ -195,7 +197,6 @@ struct DailySummaryView: View {
                         onDelete: requestDeleteSelectedRecords,
                         onRestore: restoreSelectedRecords
                     )
-                    .frame(width: 380)
                     .frame(maxHeight: .infinity)
                 }
             }
@@ -559,12 +560,14 @@ private struct SummaryRecordDetailPanel: View {
                     } label: {
                         Label("Restore", systemImage: "arrow.uturn.backward")
                     }
+                    .disabled(model.isLoading)
                 } else {
                     Button(role: .destructive) {
                         onDelete()
                     } label: {
                         Label(selectedCount > 1 ? "Delete Selected" : "Delete", systemImage: "trash")
                     }
+                    .disabled(model.isLoading)
                 }
 
                 ScrollView {
@@ -574,8 +577,6 @@ private struct SummaryRecordDetailPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.thinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                EmptyStateView(title: "Select summary", detail: "Pick one or more daily summary rows to inspect metadata and content.", systemImage: "doc.text.magnifyingglass")
             }
         }
         .padding(18)

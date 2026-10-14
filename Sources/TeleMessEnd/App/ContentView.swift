@@ -33,8 +33,6 @@ struct ContentView: View {
                             Label("Console", systemImage: "safari")
                         }
 
-                        ToolbarStatusPill(text: toolbarStatusText, kind: model.lastError == nil ? .neutral : .error)
-                            .help(model.lastError ?? model.statusMessage)
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
@@ -78,21 +76,6 @@ struct ContentView: View {
         }
     }
 
-    private var toolbarStatusText: String {
-        guard let error = model.lastError else {
-            return model.statusMessage
-        }
-        if error.localizedCaseInsensitiveContains("could not connect") {
-            return "Connection failed"
-        }
-        if error.localizedCaseInsensitiveContains("App Transport Security") {
-            return "HTTP blocked"
-        }
-        if error.localizedCaseInsensitiveContains("unauthorized") || error.localizedCaseInsensitiveContains("401") {
-            return "Auth failed"
-        }
-        return "Error"
-    }
 }
 
 private struct ProfileMenu: View {
@@ -169,48 +152,6 @@ private struct ToolbarPillLabel: View {
         .frame(minWidth: 180, maxWidth: 260, minHeight: 30)
         .background(.quaternary.opacity(0.55), in: Capsule())
         .contentShape(Capsule())
-    }
-}
-
-private struct ToolbarStatusPill: View {
-    var text: String
-    var kind: StatusBadgeKind
-
-    var body: some View {
-        Text(text)
-            .font(.callout.weight(.semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 12)
-            .frame(minWidth: 64, minHeight: 30)
-            .background(background, in: Capsule())
-            .foregroundStyle(foreground)
-            .contentShape(Capsule())
-    }
-
-    private var background: Color {
-        switch kind {
-        case .neutral:
-            Color.secondary.opacity(0.12)
-        case .success:
-            Color.green.opacity(0.14)
-        case .warning:
-            Color.orange.opacity(0.16)
-        case .error:
-            Color.red.opacity(0.16)
-        }
-    }
-
-    private var foreground: Color {
-        switch kind {
-        case .neutral:
-            .secondary
-        case .success:
-            .green
-        case .warning:
-            .orange
-        case .error:
-            .red
-        }
     }
 }
 

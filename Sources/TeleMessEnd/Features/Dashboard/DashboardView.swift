@@ -58,7 +58,9 @@ struct DashboardView: View {
             .success
         case .validating:
             .warning
-        case .unverified, .failed:
+        case .unverified:
+            .neutral
+        case .failed:
             .error
         }
     }
@@ -69,7 +71,9 @@ struct DashboardView: View {
             .green
         case .validating:
             .orange
-        case .unverified, .failed:
+        case .unverified:
+            .secondary
+        case .failed:
             .red
         }
     }
@@ -104,7 +108,7 @@ struct DashboardView: View {
                 EmptyStateView(title: "No messages loaded", detail: "Refresh the dashboard after connecting to a core profile.", systemImage: "bubble.left")
                     .frame(height: 180)
             } else {
-                MessageTable(messages: model.dashboard.recentMessages)
+                MessageTable(messages: model.dashboard.recentMessages, showMedia: model.showMedia)
                     .frame(minHeight: 260)
             }
         }

@@ -25,7 +25,7 @@ struct MessagesView: View {
             }
 
             if model.messages.isEmpty {
-                EmptyStateView(title: "No messages", detail: "Load recent messages or run a full-text search.", systemImage: "text.bubble")
+                EmptyStateView(title: model.messagesAreSearchResults ? "No matching messages" : "No messages", detail: model.messagesAreSearchResults ? "" : "Load recent messages or run a full-text search.", systemImage: "text.bubble")
             } else {
                 MessageTable(messages: model.messages) { message in
                     model.showMedia(for: message)
@@ -34,6 +34,5 @@ struct MessagesView: View {
         }
         .padding(20)
         .navigationTitle("Messages")
-        .disabled(model.isLoading)
     }
 }

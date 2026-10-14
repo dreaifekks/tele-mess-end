@@ -213,6 +213,9 @@ final class AppModel {
     var isLoading = false
     var statusMessage = "Ready"
     var lastError: String?
+    var validationError: String?
+    var mediaLoadError: String?
+    var messagesAreSearchResults = false
     var validationStatus: CoreValidationStatus = .unverified
     private(set) var profileSaveKeychainAuthorizationRequired = false
     private(set) var localCoreKeychainAuthorizationRequired = false
@@ -507,6 +510,7 @@ final class AppModel {
         }
         guard validationStatus != .validating else { return }
         let validationRevision = sessionRevision
+        validationError = nil
         validationStatus = .validating
         while isLoading {
             do {
@@ -529,7 +533,7 @@ final class AppModel {
             validationStatus = .unverified
             return
         }
-        let succeeded = await withLoading("Validating profile") { session in
+        let succeeded = await withLoading("Validating profile", onFailure: { validationError = $0.localizedDescription }) { session in
             let messageRevision = beginMessageRequest()
             do {
                 _ = try await session.client.health()
@@ -555,6 +559,7 @@ final class AppModel {
            expectedLocalCoreRevision != localCoreLifecycleRevision {
             return
         }
+        guard validationRevision == sessionRevision else { return }
         if !succeeded, validationStatus == .validating {
             validationStatus = Task.isCancelled ? .unverified : .failed
         } else if succeeded, selectedSection != .dashboard {
@@ -583,6 +588,7 @@ final class AppModel {
             dashboard.recentMessages = loadedMessages
             if messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 messages = loadedMessages
+                messagesAreSearchResults = false
             }
         } catch is CancellationError {
             return
@@ -825,6 +831,7 @@ final class AppModel {
             let loadedMessages = try await session.client.fetchRecentMessages(limit: 100, includeMedia: true).items
             try ensureCurrent(session, messageRevision: requestRevision)
             messages = loadedMessages
+            messagesAreSearchResults = false
             dashboard.recentMessages = loadedMessages
             statusMessage = "Loaded recent messages"
         }
@@ -841,6 +848,7 @@ final class AppModel {
             let loadedMessages = try await session.client.searchMessages(query: query, limit: 100, includeMedia: true)
             try ensureCurrent(session, messageRevision: requestRevision)
             messages = loadedMessages
+            messagesAreSearchResults = true
             statusMessage = "Search returned \(messages.count) messages"
         }
     }
@@ -904,6 +912,7 @@ final class AppModel {
 
     func loadMediaFiles(allowKeychainUI: Bool = true) async {
         let requestRevision = beginMediaRequest()
+        mediaLoadError = nil
         let request = MediaRequestSnapshot(
             accountID: mediaAccountFilter.nilIfEmpty,
             chatID: Int(mediaChatIDFilter),
@@ -927,7 +936,12 @@ final class AppModel {
             tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly,
             scope: .media,
             waitForConflicts: true,
-            canStart: { requestRevision == mediaRequestRevision && !Task.isCancelled }
+            canStart: { requestRevision == mediaRequestRevision && !Task.isCancelled },
+            onFailure: { error in
+                if requestRevision == mediaRequestRevision {
+                    mediaLoadError = error.localizedDescription
+                }
+            }
         ) { session in
             try ensureCurrent(session, mediaRevision: requestRevision)
             let loadedMediaFiles = try await session.client.listMediaFiles(
@@ -1637,6 +1651,7 @@ final class AppModel {
         summaryScopeAccounts = []
         summaryScopeOrigins = []
         messages = []
+        messagesAreSearchResults = false
         dailyMessagePoints = []
         participants = []
         cursors = []
@@ -1654,6 +1669,8 @@ final class AppModel {
         statusMessage = "Ready"
         lastError = nil
         validationStatus = .unverified
+        validationError = nil
+        mediaLoadError = nil
 
         originSearch = ""
         originAccountFilter = ""
@@ -1913,6 +1930,8 @@ final class AppModel {
                 dashboard.capabilities = capabilities
             }
             compatibilityCheckedSessionRevision = revision
+            validationStatus = .verified
+            validationError = nil
             if !availableSections.contains(selectedSection) {
                 selectedSection = .dashboard
             }
@@ -2053,6 +2072,7 @@ final class AppModel {
         if messageRevision == messageRequestRevision,
            messageSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             messages = snapshot.recentMessages
+            messagesAreSearchResults = false
         }
     }
 
@@ -2114,14 +2134,15 @@ final class AppModel {
         _ action: String,
         tokenReadMode: TokenReadMode = .promptIfNeeded,
         scope: OperationScope = .exclusive,
-        waitForConflicts: Bool = false,
+        waitForConflicts: Bool = true,
         canStart: () -> Bool = { true },
+        onFailure: (Error) -> Void = { _ in },
         operation: (CoreSessionContext) async throws -> Void
     ) async -> Bool {
         let operationID = UUID()
         let startingGeneration = sessionRevision
         while !activeOperations.isEmpty {
-            guard canStart() else {
+            guard startingGeneration == sessionRevision, !Task.isCancelled, canStart() else {
                 runtimeLogger.debug("Operation skipped action=\(action) reason=superseded_while_waiting")
                 return false
             }
@@ -2141,7 +2162,7 @@ final class AppModel {
                 return false
             }
         }
-        guard canStart() else {
+        guard startingGeneration == sessionRevision, !Task.isCancelled, canStart() else {
             runtimeLogger.debug("Operation skipped action=\(action) reason=superseded_before_start")
             return false
         }
@@ -2182,6 +2203,7 @@ final class AppModel {
             if startingGeneration == sessionRevision,
                latestOperationIDs[scope] == operationID {
                 lastError = error.localizedDescription
+                onFailure(error)
                 statusMessage = "Failed"
             }
             return false

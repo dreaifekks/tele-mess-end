@@ -17,10 +17,9 @@ struct MediaView: View {
             snapshot.visibleFiles.first { $0.id == selectedID }
         }
 
-        HSplitView {
-            VStack(alignment: .leading, spacing: 14) {
-                filters(snapshot: snapshot)
-
+        VStack(alignment: .leading, spacing: 14) {
+            filters(snapshot: snapshot).fixedSize(horizontal: false, vertical: true)
+            AdaptiveDetailLayout(hasDetail: selectedFile != nil) {
                 if model.isMediaQueryPending && snapshot.visibleFiles.isEmpty {
                     VStack(spacing: 10) {
                         ProgressView()
@@ -30,29 +29,25 @@ struct MediaView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if snapshot.visibleFiles.isEmpty {
                     EmptyStateView(
-                        title: model.lastError == nil
+                        title: model.mediaLoadError == nil
                             ? (hasActiveMediaFilters ? "No matching media" : "No media files")
                             : "Media request failed",
-                        detail: model.lastError == nil
+                        detail: model.mediaLoadError == nil
                             ? (hasActiveMediaFilters
                                 ? "The Core returned no media matching the current server-side filters."
                                 : "Downloaded media records appear here.")
-                            : "The latest server-side query did not complete. Update an older Core if needed, then try Reload.",
-                        systemImage: model.lastError == nil ? "photo.on.rectangle" : "exclamationmark.triangle"
+                            : model.mediaLoadError ?? "",
+                        systemImage: model.mediaLoadError == nil ? "photo.on.rectangle" : "exclamationmark.triangle"
                     )
                 } else {
                     MediaManagementTable(rows: rows, selection: $selection)
                 }
+            } detail: {
+                MediaDetailPanel(model: model, file: selectedFile)
+                    .id(selectedFile?.id ?? "none")
             }
-            .padding(20)
-            .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            MediaDetailPanel(model: model, file: selectedFile)
-                .id(selectedFile?.id ?? "none")
-                .frame(width: 420)
-                .frame(maxHeight: .infinity)
-                .padding(.leading, 12)
         }
+        .padding(20)
         .navigationTitle("Media")
         .task(id: model.sessionRevision) {
             mediaReloadTask?.cancel()
@@ -282,7 +277,6 @@ private struct MediaCoreFilterControls: View {
                 Label("Clear", systemImage: "line.3.horizontal.decrease.circle")
             }
         }
-        .disabled(model.isLoading)
     }
 }
 
@@ -422,8 +416,6 @@ private struct MediaDetailPanel: View {
                 } hide: {
                     previewState = .sealed
                 }
-            } else {
-                EmptyStateView(title: "Select media", detail: "Pick a file to inspect metadata or open content.", systemImage: "photo")
             }
         }
         .padding(20)

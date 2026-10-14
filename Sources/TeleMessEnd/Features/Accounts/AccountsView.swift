@@ -34,7 +34,7 @@ struct AccountsView: View {
                 if model.accounts.isEmpty {
                     EmptyStateView(title: "No accounts", detail: "Create account metadata, then request a Telegram login code.", systemImage: "person.badge.plus")
                 } else {
-                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, requestDelete: { account in
+                    AccountsTable(accounts: model.accounts, selection: $selectedAccountID, isLoading: model.isLoading, requestDelete: { account in
                         pendingDeleteAccount = account
                     })
                 }
@@ -42,7 +42,6 @@ struct AccountsView: View {
             .padding(20)
         }
         .navigationTitle("Accounts")
-        .disabled(model.isLoading)
         .task(id: model.sessionRevision) {
             resetForSession()
             syncSelectionAfterAccountsChange()
@@ -76,6 +75,7 @@ struct AccountsView: View {
                 }
                 pendingDeleteAccount = nil
             }
+            .disabled(model.isLoading)
             Button("Cancel", role: .cancel) {
                 pendingDeleteAccount = nil
             }
@@ -150,7 +150,7 @@ struct AccountsView: View {
                 } label: {
                     Label(isCreatingAccount ? "Add Account" : "Save Account", systemImage: "square.and.arrow.down")
                 }
-                .disabled(accountID.isEmpty)
+                .disabled(model.isLoading || accountID.isEmpty)
             }
 
             Section("Telegram Auth") {
@@ -160,11 +160,11 @@ struct AccountsView: View {
                     Button("Status") {
                         Task { await model.authStatus(accountID: accountID) }
                     }
-                    .disabled(accountID.isEmpty)
+                    .disabled(model.isLoading || accountID.isEmpty)
                     Button("Request Code") {
                         Task { await model.requestCode(accountID: accountID, phone: phone) }
                     }
-                    .disabled(accountID.isEmpty || phone.isEmpty)
+                    .disabled(model.isLoading || accountID.isEmpty || phone.isEmpty)
                 }
                 Button {
                     Task {
@@ -173,7 +173,7 @@ struct AccountsView: View {
                 } label: {
                     Label("Submit Code", systemImage: "paperplane")
                 }
-                .disabled(accountID.isEmpty || phone.isEmpty || code.isEmpty)
+                .disabled(model.isLoading || accountID.isEmpty || phone.isEmpty || code.isEmpty)
             }
         }
         .formStyle(.grouped)
@@ -241,6 +241,7 @@ struct AccountsView: View {
 private struct AccountsTable: View {
     var accounts: [CoreAccount]
     @Binding var selection: CoreAccount.ID?
+    var isLoading: Bool
     var requestDelete: (CoreAccount) -> Void
 
     var body: some View {
@@ -282,6 +283,7 @@ private struct AccountsTable: View {
                         .foregroundStyle(.red)
                 }
                 .buttonStyle(.borderless)
+                .disabled(isLoading)
             }
             .width(min: 54, ideal: 64, max: 72)
         }

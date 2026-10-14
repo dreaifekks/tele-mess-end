@@ -18,7 +18,7 @@ struct MessageTable: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(message.displayChat)
                             .lineLimit(1)
-                        Text("\(message.chatID) · \(message.accountID)")
+                        Text(verbatim: "\(message.chatID) · \(message.accountID)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -40,7 +40,7 @@ struct MessageTable: View {
                             .lineLimit(3)
                     }
                 }
-                .width(min: 220, ideal: 400)
+                .width(min: 200)
 
                 TableColumn("Media") { message in
                     HStack {

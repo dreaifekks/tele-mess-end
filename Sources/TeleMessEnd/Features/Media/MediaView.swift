@@ -374,9 +374,9 @@ private struct MediaDetailPanel: View {
 
                         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                             GridRow { Text("Account").foregroundStyle(.secondary); Text(file.accountID) }
-                            GridRow { Text("Chat").foregroundStyle(.secondary); Text("\(file.chatID)") }
-                            GridRow { Text("Message").foregroundStyle(.secondary); Text("\(file.messageID)") }
-                            GridRow { Text("Index").foregroundStyle(.secondary); Text("\(file.fileIndex)") }
+                            GridRow { Text("Chat").foregroundStyle(.secondary); Text(verbatim: "\(file.chatID)") }
+                            GridRow { Text("Message").foregroundStyle(.secondary); Text(verbatim: "\(file.messageID)") }
+                            GridRow { Text("Index").foregroundStyle(.secondary); Text(verbatim: "\(file.fileIndex)") }
                             GridRow { Text("Type").foregroundStyle(.secondary); Text(file.displayType.title) }
                             GridRow { Text("Extension").foregroundStyle(.secondary); Text(file.fileExtension.map { ".\($0)" } ?? "—") }
                             GridRow { Text("Content Type").foregroundStyle(.secondary); Text(file.contentType ?? file.mimeType ?? "—") }

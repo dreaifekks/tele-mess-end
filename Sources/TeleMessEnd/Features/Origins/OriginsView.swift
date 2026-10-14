@@ -158,7 +158,7 @@ struct OriginsView: View {
                         Text(origin.displayTitle)
                             .lineLimit(1)
                             .fontWeight(origin.important ? .medium : .regular)
-                        Text("\(origin.originID) / topic \(origin.topicID)")
+                        Text(verbatim: "\(origin.originID) / topic \(origin.topicID)")
                             .font(.caption)
                             .foregroundStyle(origin.important ? Color.primary.opacity(0.76) : Color.secondary)
                     }
@@ -441,8 +441,8 @@ private struct OriginInspectorView: View {
                 .lineLimit(2)
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                 GridRow { Text("Account").foregroundStyle(.secondary); Text(origin.accountID) }
-                GridRow { Text("Origin").foregroundStyle(.secondary); Text("\(origin.originID)") }
-                GridRow { Text("Topic").foregroundStyle(.secondary); Text("\(origin.topicID)") }
+                GridRow { Text("Origin").foregroundStyle(.secondary); Text(verbatim: "\(origin.originID)") }
+                GridRow { Text("Topic").foregroundStyle(.secondary); Text(verbatim: "\(origin.topicID)") }
                 GridRow { Text("Type").foregroundStyle(.secondary); Text(origin.originType) }
                 if let parentTitle = origin.parentTitle, !parentTitle.isEmpty {
                     GridRow { Text("Parent").foregroundStyle(.secondary); Text(parentTitle) }

@@ -198,11 +198,11 @@ private struct ParticipantsTable: View {
     var body: some View {
         Table(participants, selection: $selection) {
             TableColumn("Account") { Text($0.accountID) }
-            TableColumn("Origin") { Text("\($0.originID)") }
+            TableColumn("Origin") { Text(verbatim: "\($0.originID)") }
             TableColumn("User") { participant in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(participant.displayName ?? participant.username ?? "\(participant.userID)")
-                    Text("\(participant.userID)")
+                    Text(verbatim: "\(participant.userID)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -223,7 +223,7 @@ private struct CaptureCursorsTable: View {
             TableColumn("Origin") { cursor in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cursor.originTitle ?? "\(cursor.originID)")
-                    Text("topic \(cursor.topicID)")
+                    Text(verbatim: "topic \(cursor.topicID)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -246,7 +246,7 @@ private struct MediaFilesTable: View {
             TableColumn("Chat") { file in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(file.chatTitle ?? "\(file.chatID)")
-                    Text("\(file.chatID) / \(file.messageID)")
+                    Text(verbatim: "\(file.chatID) / \(file.messageID)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

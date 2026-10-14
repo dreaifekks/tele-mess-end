@@ -701,14 +701,14 @@ private struct MarkdownContentView: View {
 }
 
 private func summaryJobStatusKind(_ status: String) -> StatusBadgeKind {
-        switch status.lowercased() {
-        case "completed":
-            .success
-        case "failed":
-            .error
-        case "cancel_requested", "cancelled", "canceled":
-            .warning
-        default:
-            .neutral
-        }
+    switch status.lowercased() {
+    case "completed":
+        .success
+    case "failed":
+        .error
+    case "cancel_requested", "cancelled", "canceled":
+        .warning
+    default:
+        .neutral
     }
+}

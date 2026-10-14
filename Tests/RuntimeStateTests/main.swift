@@ -168,6 +168,9 @@ enum RuntimeStateTests {
         await runner.run("cancelled queued operations do not start") {
             try await queuedOperations(staleSession: false, cancelled: true)
         }
+        await runner.run("queued message point refreshes coalesce to the latest request") {
+            try await messagePointRefreshesCoalesce()
+        }
         runner.finish()
     }
 
@@ -194,6 +197,34 @@ enum RuntimeStateTests {
         await second.value
         try expectEqual(await transport.count, staleSession || cancelled ? 1 : 2)
         try expectEqual(model.isLoading, false)
+        try expectNil(model.lastError)
+    }
+
+    @MainActor
+    private static func messagePointRefreshesCoalesce() async throws {
+        let defaults = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuiteName) }
+        let transport = QueuedAccountsTransport()
+        let model = AppModel(
+            profileStore: CoreProfileStore(defaults: defaults),
+            summarySettingsStore: SummarySettingsStore(defaults: defaults),
+            keychain: EmptyCredentialStore(),
+            transport: transport
+        )
+        let blocker = Task { await model.loadAccounts(allowKeychainUI: false) }
+        while await transport.count == 0 { await Task.yield() }
+        var refreshes: [Task<Void, Never>] = []
+        for query in ["first", "second", "latest"] {
+            model.messagePointSearchQuery = query
+            refreshes.append(Task { await model.loadDailyMessagePoints(allowKeychainUI: false) })
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try expectEqual(await transport.count, 1)
+        await transport.releaseFirst()
+        await blocker.value
+        for refresh in refreshes { await refresh.value }
+        try expectEqual(await transport.count, 2)
+        try expectEqual(await transport.messagePointQueries, ["latest"])
         try expectNil(model.lastError)
     }
 
@@ -969,6 +1000,7 @@ enum RuntimeStateTests {
         try expectEqual(model.selectedProfile?.name, profile.name)
         try expectEqual(localRunner.isRunning, true)
         try expectEqual(model.lastError, "Stop this local Core before changing its profile settings.")
+        try expectEqual(model.settingsError, model.lastError)
 
         try expectEqual(await localRunner.stop(), true)
     }
@@ -990,6 +1022,7 @@ enum RuntimeStateTests {
         profile.name = "Repaired Profile"
 
         try expectEqual(model.saveProfile(profile, token: "test-token"), false)
+        try expectEqual(model.settingsError, model.lastError)
         try expectEqual(credentials.saveCount, 1)
         try expectEqual(credentials.forceResetRequests, [])
         try expectEqual(model.selectedProfile?.name, originalName)
@@ -1010,6 +1043,7 @@ enum RuntimeStateTests {
             false
         )
         try expectEqual(credentials.forceResetRequests, [])
+        try expectEqual(model.settingsError, model.lastError)
         try expectEqual(credentials.saveCount, 1)
         try expectEqual(model.selectedProfile?.name, originalName)
 
@@ -1022,6 +1056,7 @@ enum RuntimeStateTests {
         try expectEqual(model.selectedProfile?.name, "Repaired Profile")
         try expectEqual(model.profileSaveKeychainAuthorizationRequired, false)
         try expectNil(model.lastError)
+        try expectNil(model.settingsError)
     }
 
     @MainActor
@@ -2422,6 +2457,7 @@ private enum RuntimeTestError: Error, CustomStringConvertible {
 
 private actor QueuedAccountsTransport: CoreHTTPTransport {
     private(set) var count = 0
+    private(set) var messagePointQueries: [String] = []
     private var continuation: CheckedContinuation<Void, Never>?
 
     func releaseFirst() {
@@ -2431,6 +2467,9 @@ private actor QueuedAccountsTransport: CoreHTTPTransport {
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         count += 1
+        if request.url?.path == "/manage/daily-message-points" {
+            messagePointQueries.append(queryValues(request)["q"]?.first ?? "")
+        }
         if count == 1 {
             await withCheckedContinuation { continuation = $0 }
         }

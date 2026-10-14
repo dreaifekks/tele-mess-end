@@ -11,7 +11,7 @@ struct AdaptiveDetailLayout<ListContent: View, Detail: View>: View {
             if !hasDetail {
                 list()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if proxy.size.width >= 1100 {
+            } else if proxy.size.width >= UILayout.inlineDetailMinimumWidth {
                 HSplitView {
                     list().frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     detail().frame(width: UILayout.detailWidth)

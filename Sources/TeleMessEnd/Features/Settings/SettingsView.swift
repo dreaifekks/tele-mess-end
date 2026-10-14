@@ -153,7 +153,7 @@ struct SettingsView: View {
                     }
                     .disabled(profileEditingIsLocked)
 
-                    if let error = model.validationError {
+                    if let error = model.settingsError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(StatusBadgeKind.error.tint)
                             .font(.callout)

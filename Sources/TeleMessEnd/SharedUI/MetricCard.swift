@@ -5,7 +5,6 @@ struct MetricCard: View {
     var value: String
     var detail: String?
     var systemImage: String
-    var timestamp: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -14,14 +13,11 @@ struct MetricCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-            if let timestamp {
-                TimestampText(timestamp)
-            } else {
-                Text(value)
-                    .font(.title2.monospacedDigit())
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-            }
+            Text(value)
+                .font(.title2)
+                .monospacedDigit()
+                .fontWeight(.semibold)
+                .lineLimit(1)
             if let detail, !detail.isEmpty {
                 Text(detail)
                     .foregroundStyle(.secondary)

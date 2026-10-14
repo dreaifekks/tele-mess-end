@@ -183,6 +183,7 @@ final class AppModel {
     @ObservationIgnored private var latestOperationIDs: [OperationScope: UUID] = [:]
     @ObservationIgnored private var messageRequestRevision: UInt64 = 0
     @ObservationIgnored private var mediaRequestRevision: UInt64 = 0
+    @ObservationIgnored private var messagePointRequestRevision: UInt64 = 0
     @ObservationIgnored private var appliedMediaRequest: MediaRequestSnapshot?
     @ObservationIgnored private var dailySummaryRequestRevision: UInt64 = 0
     @ObservationIgnored private var compatibilityCheckedSessionRevision: UInt64?
@@ -213,7 +214,7 @@ final class AppModel {
     var isLoading = false
     var statusMessage = "Ready"
     var lastError: String?
-    var validationError: String?
+    var settingsError: String?
     var mediaLoadError: String?
     var messagesAreSearchResults = false
     var validationStatus: CoreValidationStatus = .unverified
@@ -510,7 +511,7 @@ final class AppModel {
         }
         guard validationStatus != .validating else { return }
         let validationRevision = sessionRevision
-        validationError = nil
+        settingsError = nil
         validationStatus = .validating
         while isLoading {
             do {
@@ -533,7 +534,7 @@ final class AppModel {
             validationStatus = .unverified
             return
         }
-        let succeeded = await withLoading("Validating profile", onFailure: { validationError = $0.localizedDescription }) { session in
+        let succeeded = await withLoading("Validating profile", onFailure: { settingsError = $0.localizedDescription }) { session in
             let messageRevision = beginMessageRequest()
             do {
                 _ = try await session.client.health()
@@ -854,9 +855,12 @@ final class AppModel {
     }
 
     func loadDailyMessagePoints(allowKeychainUI: Bool = true) async {
+        messagePointRequestRevision &+= 1
+        let requestRevision = messagePointRequestRevision
         await withLoading(
             "Loading message points",
-            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly
+            tokenReadMode: allowKeychainUI ? .promptIfNeeded : .cacheOnly,
+            canStart: { requestRevision == messagePointRequestRevision }
         ) { session in
             let minimumImportance = min(messagePointImportanceMin, messagePointImportanceMax)
             let maximumImportance = max(messagePointImportanceMin, messagePointImportanceMax)
@@ -877,6 +881,7 @@ final class AppModel {
                 limit: 1_000
             )
             try ensureCurrent(session)
+            guard requestRevision == messagePointRequestRevision else { throw CancellationError() }
             dailyMessagePoints = sortDailyMessagePoints(loadedPoints)
             statusMessage = dailyMessagePoints.count == 1_000
                 ? "Loaded 1,000 completed message points (limit reached)"
@@ -937,11 +942,7 @@ final class AppModel {
             scope: .media,
             waitForConflicts: true,
             canStart: { requestRevision == mediaRequestRevision && !Task.isCancelled },
-            onFailure: { error in
-                if requestRevision == mediaRequestRevision {
-                    mediaLoadError = error.localizedDescription
-                }
-            }
+            onFailure: { mediaLoadError = $0.localizedDescription }
         ) { session in
             try ensureCurrent(session, mediaRevision: requestRevision)
             let loadedMediaFiles = try await session.client.listMediaFiles(
@@ -1253,6 +1254,7 @@ final class AppModel {
 
     @discardableResult
     func saveProfile(_ profile: CoreProfile, token: String?) -> Bool {
+        settingsError = nil
         let profileSuffix = String(profile.id.uuidString.suffix(8))
         let credentialAction: String
         if let token {
@@ -1266,6 +1268,7 @@ final class AppModel {
         failedCredentialSaveProfileID = nil
         if localRunner.activeProfileID == profile.id {
             lastError = "Stop this local Core before changing its profile settings."
+            settingsError = lastError
             statusMessage = "Stop local Core first"
             runtimeLogger.warning("Profile save blocked profileSuffix=\(profileSuffix) reason=local_core_active")
             return false
@@ -1302,6 +1305,7 @@ final class AppModel {
             lastError = lastCredentialSaveRequiresAuthorization
                 ? profileSaveKeychainAuthorizationMessage
                 : error.localizedDescription
+            settingsError = lastError
             statusMessage = lastCredentialSaveRequiresAuthorization
                 ? "Keychain authorization required"
                 : "Failed"
@@ -1318,6 +1322,7 @@ final class AppModel {
               failedCredentialSaveProfileID == profile.id,
               token != nil else {
             lastError = "Retry Save first so TeleMessEnd can identify the credential operation that needs Keychain repair."
+            settingsError = lastError
             statusMessage = "Failed"
             runtimeLogger.warning(
                 "Profile Keychain repair blocked profileSuffix=\(profileSuffix) reason=no_matching_failed_save"
@@ -1338,6 +1343,7 @@ final class AppModel {
             lastError = requiresAuthorization
                 ? profileSaveKeychainAuthorizationMessage
                 : error.localizedDescription
+            settingsError = lastError
             statusMessage = requiresAuthorization ? "Keychain authorization required" : "Failed"
             runtimeLogger.warning(
                 "Profile Keychain repair end profileSuffix=\(profileSuffix) result=failure error=\(safeRuntimeErrorSummary(error))"
@@ -1371,6 +1377,7 @@ final class AppModel {
             return true
         } catch {
             lastError = "Profile deleted, but its saved token could not be removed: \(error.localizedDescription)"
+            settingsError = lastError
             statusMessage = "Profile deleted"
             runtimeLogger.warning("Profile delete end profileSuffix=\(profileSuffix) result=credential_cleanup_failed error=\(safeRuntimeErrorSummary(error))")
             return true
@@ -1458,6 +1465,7 @@ final class AppModel {
             lastError = localCoreKeychainAuthorizationRequired
                 ? localCoreKeychainAuthorizationMessage
                 : error.localizedDescription
+            settingsError = lastError
             statusMessage = localCoreKeychainAuthorizationRequired
                 ? "Keychain authorization required"
                 : "Failed"
@@ -1525,6 +1533,7 @@ final class AppModel {
         localCoreLifecycleRevision &+= 1
         let lifecycleRevision = localCoreLifecycleRevision
         lastError = nil
+        settingsError = nil
         validationStatus = .validating
         statusMessage = "Starting local Core"
 
@@ -1536,6 +1545,7 @@ final class AppModel {
             guard selectedProfile?.id == profileID else { return false }
             validationStatus = .failed
             lastError = localRunner.lastError ?? "The local Core could not be started."
+            settingsError = lastError
             statusMessage = "Failed"
             return false
         }
@@ -1557,6 +1567,7 @@ final class AppModel {
             guard localRunner.markReady(profileID: profileID) else {
                 validationStatus = .failed
                 lastError = "The local Core exited before readiness could be confirmed."
+                settingsError = lastError
                 statusMessage = "Failed"
                 return false
             }
@@ -1581,6 +1592,7 @@ final class AppModel {
             }
             validationStatus = .failed
             lastError = message
+            settingsError = lastError
             statusMessage = "Failed"
             return false
         case .cancelled:
@@ -1631,6 +1643,7 @@ final class AppModel {
         sessionRevision &+= 1
         messageRequestRevision &+= 1
         mediaRequestRevision &+= 1
+        messagePointRequestRevision &+= 1
         dailySummaryRequestRevision &+= 1
         compatibilityCheckedSessionRevision = nil
         tokenCache = nil
@@ -1669,7 +1682,7 @@ final class AppModel {
         statusMessage = "Ready"
         lastError = nil
         validationStatus = .unverified
-        validationError = nil
+        settingsError = nil
         mediaLoadError = nil
 
         originSearch = ""
@@ -1931,7 +1944,7 @@ final class AppModel {
             }
             compatibilityCheckedSessionRevision = revision
             validationStatus = .verified
-            validationError = nil
+            settingsError = nil
             if !availableSections.contains(selectedSection) {
                 selectedSection = .dashboard
             }

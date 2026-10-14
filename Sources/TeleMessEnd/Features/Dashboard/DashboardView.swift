@@ -72,7 +72,7 @@ struct DashboardView: View {
             MetricCard(title: "Operation Errors", value: DisplayFormat.count(state?.operationErrorCount), detail: "Failed, partial, rate limited", systemImage: "exclamationmark.triangle")
             MetricCard(title: "Schema", value: state?.schemaVersionText ?? "-", detail: "Core archive schema", systemImage: "square.stack.3d.up")
             MetricCard(title: "Database", value: state?.databaseID ?? "-", detail: "Archive identity", systemImage: "cylinder")
-            MetricCard(title: "Server Time", value: "", detail: "Core clock", systemImage: "clock", timestamp: state?.serverTime ?? "")
+            MetricCard(title: "Server Time", value: DisplayFormat.shortDateTime(state?.serverTime), detail: "Core clock", systemImage: "clock")
             MetricCard(title: "API Contract", value: model.dashboard.apiManifest?.contractVersion ?? "-", detail: "Live manifest version", systemImage: "doc.badge.gearshape")
             MetricCard(title: "Contract Hash", value: model.dashboard.apiManifest?.contractHash ?? "-", detail: "Compatibility fingerprint", systemImage: "number")
         }
@@ -89,8 +89,7 @@ struct DashboardView: View {
                 EmptyStateView(title: "No messages loaded", detail: "Refresh the dashboard after connecting to a core profile.", systemImage: "bubble.left")
                     .frame(height: 180)
             } else {
-                MessageTable(messages: model.dashboard.recentMessages, showMedia: model.showMedia)
-                    .frame(minHeight: 260)
+                MessageTable(messages: model.dashboard.recentMessages, tableMinHeight: 260, showMedia: model.showMedia)
             }
         }
     }

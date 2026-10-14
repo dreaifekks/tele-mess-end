@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MessageTable: View {
     var messages: [CoreMessage]
+    var tableMinHeight: CGFloat = 120
     var showMedia: ((CoreMessage) -> Void)?
     @State private var selection: CoreMessage.ID?
 
@@ -67,7 +68,7 @@ struct MessageTable: View {
                 }
                 .width(min: 65, ideal: 80, max: 100)
             }
-            .frame(minHeight: 120)
+            .frame(minHeight: tableMinHeight)
 
             if let selectedMessage = messages.first(where: { $0.id == selection }) {
                 ScrollView {

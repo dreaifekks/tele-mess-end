@@ -181,7 +181,9 @@ if [[ "$NOTARIZE" == "1" ]]; then
   xcrun notarytool "${notary_args[@]}"
   log "stapling notarization ticket"
   xcrun stapler staple "$DMG_PATH"
-  xcrun stapler validate "$DMG_PATH"
+  # Gatekeeper reads the stapled ticket offline. `stapler validate` needs a
+  # CloudKit round trip and fails on transient network errors.
+  /usr/sbin/spctl --assess --type open --context context:primary-signature -vv "$DMG_PATH"
 fi
 
 log "created $DMG_PATH"

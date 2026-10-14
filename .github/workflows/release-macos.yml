@@ -126,10 +126,6 @@ jobs:
 
           hdiutil verify "${artifacts[0]}"
 
-          if [[ "$RELEASE_SIGNING" == "notarized" ]]; then
-            spctl --assess --type open --context context:primary-signature -vv "${artifacts[0]}"
-          fi
-
       - name: Upload DMG artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4

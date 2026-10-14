@@ -8,7 +8,6 @@ private struct ContentLoadKey: Hashable {
 
 struct ContentView: View {
     @Bindable var model: AppModel
-    @Bindable var updateChecker: UpdateChecker
     @State private var observedSessionRevision: UInt64?
 
     var body: some View {
@@ -52,12 +51,6 @@ struct ContentView: View {
         .task {
             await model.runRecentMessageRefreshLoop()
         }
-        .task {
-            await updateChecker.check()
-        }
-        .alert("TeleMessEnd is up to date", isPresented: $updateChecker.showsUpToDate) {
-            Button("OK", role: .cancel) {}
-        }
         .background(WindowFrameAutosaveView(autosaveName: "TeleMessEndMainWindow"))
     }
 
@@ -65,7 +58,7 @@ struct ContentView: View {
     private var detailView: some View {
         switch model.selectedSection {
         case .dashboard:
-            DashboardView(model: model, updateChecker: updateChecker)
+            DashboardView(model: model)
         case .accounts:
             AccountsView(model: model)
         case .origins:

@@ -16,7 +16,7 @@ struct OperationEventsTable: View {
                         requestDelete(event)
                     } label: {
                         Image(systemName: "trash")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(StatusBadgeKind.error.tint)
                     }
                     .buttonStyle(.borderless)
                     .disabled(isLoading)
@@ -33,8 +33,7 @@ struct OperationEventsTable: View {
     @TableColumnBuilder<CoreOperationEvent, Never>
     private var eventColumns: some TableColumnContent<CoreOperationEvent, Never> {
         TableColumn("Time") { event in
-            Text(DisplayFormat.shortDateTime(event.occurredAt))
-                .foregroundStyle(.secondary)
+            TimestampText(event.occurredAt)
         }
         .width(min: 140, ideal: 180)
 

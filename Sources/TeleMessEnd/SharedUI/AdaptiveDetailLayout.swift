@@ -14,7 +14,7 @@ struct AdaptiveDetailLayout<ListContent: View, Detail: View>: View {
             } else if proxy.size.width >= 1100 {
                 HSplitView {
                     list().frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                    detail().frame(width: 400)
+                    detail().frame(width: UILayout.detailWidth)
                 }
             } else {
                 VSplitView {

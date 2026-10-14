@@ -5,6 +5,15 @@ enum StatusBadgeKind {
     case success
     case warning
     case error
+
+    var tint: Color {
+        switch self {
+        case .neutral: .secondary
+        case .success: .green
+        case .warning: .orange
+        case .error: .red
+        }
+    }
 }
 
 struct StatusBadge: View {
@@ -17,34 +26,8 @@ struct StatusBadge: View {
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(background)
-            .foregroundStyle(foreground)
+            .background(kind.tint.opacity(0.14))
+            .foregroundStyle(kind.tint)
             .clipShape(Capsule())
-    }
-
-    private var background: Color {
-        switch kind {
-        case .neutral:
-            Color.secondary.opacity(0.12)
-        case .success:
-            Color.green.opacity(0.14)
-        case .warning:
-            Color.orange.opacity(0.16)
-        case .error:
-            Color.red.opacity(0.14)
-        }
-    }
-
-    private var foreground: Color {
-        switch kind {
-        case .neutral:
-            .secondary
-        case .success:
-            .green
-        case .warning:
-            .orange
-        case .error:
-            .red
-        }
     }
 }

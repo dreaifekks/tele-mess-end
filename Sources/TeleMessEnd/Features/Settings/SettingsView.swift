@@ -155,7 +155,7 @@ struct SettingsView: View {
 
                     if let error = model.validationError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(StatusBadgeKind.error.tint)
                             .font(.callout)
                             .textSelection(.enabled)
                     } else if model.validationStatus != .unverified {

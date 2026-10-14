@@ -17,7 +17,7 @@ struct MediaView: View {
             snapshot.visibleFiles.first { $0.id == selectedID }
         }
 
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             filters(snapshot: snapshot).fixedSize(horizontal: false, vertical: true)
             AdaptiveDetailLayout(hasDetail: selectedFile != nil) {
                 if model.isMediaQueryPending && snapshot.visibleFiles.isEmpty {
@@ -77,7 +77,7 @@ struct MediaView: View {
                     ),
                     resetRevision: $textFilterResetRevision
                 )
-                .frame(minWidth: 190, idealWidth: 250, maxWidth: 320)
+                .frame(width: UILayout.wideField)
                 Picker(
                     "Type",
                     selection: Binding(
@@ -90,7 +90,7 @@ struct MediaView: View {
                         Text(type.title).tag(type.rawValue)
                     }
                 }
-                .frame(width: 155)
+                .frame(width: UILayout.standardField)
                 DebouncedMediaTextField(
                     prompt: "Extension",
                     text: Binding(
@@ -99,7 +99,7 @@ struct MediaView: View {
                     ),
                     resetRevision: $textFilterResetRevision
                 )
-                .frame(width: 175)
+                .frame(width: UILayout.standardField)
                 Spacer()
             }
             MediaCoreFilterControls(
@@ -262,17 +262,17 @@ private struct MediaCoreFilterControls: View {
     var body: some View {
         HStack {
             TextField("Account", text: $model.mediaAccountFilter)
+                .onSubmit(reload)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
+                .frame(width: UILayout.standardField)
             TextField("Chat ID", text: $model.mediaChatIDFilter)
+                .onSubmit(reload)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 130)
+                .frame(width: UILayout.compactField)
             TextField("Message ID", text: $model.mediaMessageIDFilter)
+                .onSubmit(reload)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 130)
-            Button(action: reload) {
-                Label("Reload", systemImage: "arrow.clockwise")
-            }
+                .frame(width: UILayout.compactField)
             Button(action: clear) {
                 Label("Clear", systemImage: "line.3.horizontal.decrease.circle")
             }
@@ -285,7 +285,7 @@ private struct MediaTableRow: Identifiable {
     var filename: String
     var typeTitle: String
     var fileExtension: String?
-    var downloadedText: String
+    var downloadedAt: String?
     var accountID: String
     var chatTitle: String
     var chatMetadata: String
@@ -296,7 +296,7 @@ private struct MediaTableRow: Identifiable {
         self.filename = file.suggestedFilename
         self.typeTitle = file.displayType.title
         self.fileExtension = file.fileExtension
-        self.downloadedText = DisplayFormat.shortDateTime(file.downloadedAt)
+        self.downloadedAt = file.downloadedAt
         self.accountID = file.accountID
         self.chatTitle = file.displayTitle
         self.chatMetadata = "\(file.chatID) / \(file.messageID)"
@@ -330,9 +330,7 @@ private struct MediaManagementTable: View {
             .width(min: 75, ideal: 90)
 
             TableColumn("Downloaded") { row in
-                Text(row.downloadedText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                TimestampText(row.downloadedAt)
             }
             .width(min: 120, ideal: 160)
 
@@ -366,61 +364,63 @@ private struct MediaDetailPanel: View {
     @State private var previewState: MediaPreviewState = .sealed
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if let file {
-                Text(file.suggestedFilename)
-                    .font(.headline)
-                    .lineLimit(2)
+        DetailPanel {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let file {
+                        Text(file.suggestedFilename)
+                            .font(.headline)
+                            .lineLimit(2)
 
-                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-                    GridRow { Text("Account").foregroundStyle(.secondary); Text(file.accountID) }
-                    GridRow { Text("Chat").foregroundStyle(.secondary); Text("\(file.chatID)") }
-                    GridRow { Text("Message").foregroundStyle(.secondary); Text("\(file.messageID)") }
-                    GridRow { Text("Index").foregroundStyle(.secondary); Text("\(file.fileIndex)") }
-                    GridRow { Text("Type").foregroundStyle(.secondary); Text(file.displayType.title) }
-                    GridRow { Text("Extension").foregroundStyle(.secondary); Text(file.fileExtension.map { ".\($0)" } ?? "—") }
-                    GridRow { Text("Content Type").foregroundStyle(.secondary); Text(file.contentType ?? file.mimeType ?? "—") }
-                    GridRow { Text("Size").foregroundStyle(.secondary); Text(file.fileSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "") }
-                    if let location = file.filePath ?? file.bestURLString, !location.isEmpty {
-                        GridRow {
-                            Text("Location").foregroundStyle(.secondary)
-                            Text(location)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                                .help(location)
+                        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                            GridRow { Text("Account").foregroundStyle(.secondary); Text(file.accountID) }
+                            GridRow { Text("Chat").foregroundStyle(.secondary); Text("\(file.chatID)") }
+                            GridRow { Text("Message").foregroundStyle(.secondary); Text("\(file.messageID)") }
+                            GridRow { Text("Index").foregroundStyle(.secondary); Text("\(file.fileIndex)") }
+                            GridRow { Text("Type").foregroundStyle(.secondary); Text(file.displayType.title) }
+                            GridRow { Text("Extension").foregroundStyle(.secondary); Text(file.fileExtension.map { ".\($0)" } ?? "—") }
+                            GridRow { Text("Content Type").foregroundStyle(.secondary); Text(file.contentType ?? file.mimeType ?? "—") }
+                            GridRow { Text("Size").foregroundStyle(.secondary); Text(file.fileSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "") }
+                            if let location = file.filePath ?? file.bestURLString, !location.isEmpty {
+                                GridRow {
+                                    Text("Location").foregroundStyle(.secondary)
+                                    Text(location)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                        .textSelection(.enabled)
+                                        .help(location)
+                                }
+                            }
+                        }
+                        .font(.callout)
+
+                        HStack {
+                            Button {
+                                Task { await model.openMediaFile(file) }
+                            } label: {
+                                Label("Open", systemImage: "arrow.down.circle")
+                            }
+                            if let urlString = file.bestURLString, !urlString.isEmpty {
+                                Button {
+                                    copyURL(urlString)
+                                } label: {
+                                    Label("Copy URL", systemImage: "link")
+                                }
+                            }
+                        }
+
+                        MediaPreviewPanel(file: file, state: previewState) {
+                            Task { await loadPreview(for: file) }
+                        } reload: {
+                            Task { await loadPreview(for: file) }
+                        } hide: {
+                            previewState = .sealed
                         }
                     }
                 }
-                .font(.callout)
-
-                HStack {
-                    Button {
-                        Task { await model.openMediaFile(file) }
-                    } label: {
-                        Label("Open", systemImage: "arrow.down.circle")
-                    }
-                    if let urlString = file.bestURLString, !urlString.isEmpty {
-                        Button {
-                            copyURL(urlString)
-                        } label: {
-                            Label("Copy URL", systemImage: "link")
-                        }
-                    }
-                }
-
-                MediaPreviewPanel(file: file, state: previewState) {
-                    Task { await loadPreview(for: file) }
-                } reload: {
-                    Task { await loadPreview(for: file) }
-                } hide: {
-                    previewState = .sealed
-                }
+                .frame(maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .padding(20)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial)
     }
 
     private func loadPreview(for file: CoreMediaFile) async {
@@ -476,7 +476,7 @@ private struct MediaPreviewPanel: View {
                     Button {
                         reload()
                     } label: {
-                        Label("Reload", systemImage: "arrow.clockwise")
+                        Label("Reload Preview", systemImage: "arrow.clockwise")
                     }
                     Button {
                         hide()

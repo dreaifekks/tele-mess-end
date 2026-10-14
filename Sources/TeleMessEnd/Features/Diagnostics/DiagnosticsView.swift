@@ -14,7 +14,7 @@ struct DiagnosticsView: View {
     @State private var pendingDeleteOperationEvent: CoreOperationEvent?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Picker("View", selection: $model.diagnosticsSelection) {
                     ForEach(DiagnosticsSection.allCases) { section in
@@ -25,24 +25,18 @@ struct DiagnosticsView: View {
                 .frame(maxWidth: 520)
 
                 Spacer()
-
-                Button {
-                    Task { await model.loadDiagnostics() }
-                } label: {
-                    Label("Reload", systemImage: "arrow.clockwise")
-                }
             }
 
             HStack {
                 TextField("Account filter", text: $model.diagnosticsAccountFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
+                    .frame(width: UILayout.standardField)
                 TextField("Origin ID", text: $model.diagnosticsOriginIDFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 130)
+                    .frame(width: UILayout.compactField)
                 TextField("Status", text: $model.diagnosticsStatusFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 130)
+                    .frame(width: UILayout.compactField)
                 Button {
                     if let originID = Int(model.diagnosticsOriginIDFilter), !model.diagnosticsAccountFilter.isEmpty {
                         Task { await model.refreshParticipants(accountID: model.diagnosticsAccountFilter, originID: originID) }
@@ -90,12 +84,12 @@ struct DiagnosticsView: View {
 
     @ViewBuilder
     private var content: some View {
-        HSplitView {
+        AdaptiveDetailLayout(hasDetail: selectedDetailPayload != nil) {
             tableContent
-
-            RawPayloadView(title: selectedDetailTitle, payload: selectedDetailPayload)
-                .frame(minWidth: 280, idealWidth: 360, maxWidth: 620)
-                .padding(.leading, 12)
+        } detail: {
+            DetailPanel {
+                RawPayloadView(title: selectedDetailTitle, payload: selectedDetailPayload)
+            }
         }
     }
 
@@ -214,7 +208,7 @@ private struct ParticipantsTable: View {
                 }
             }
             TableColumn("Role") { Text($0.role ?? "") }
-            TableColumn("Updated") { Text(DisplayFormat.shortDateTime($0.updatedAt)).foregroundStyle(.secondary) }
+            TableColumn("Updated") { TimestampText($0.updatedAt) }
         }
     }
 }
@@ -235,8 +229,8 @@ private struct CaptureCursorsTable: View {
                 }
             }
             TableColumn("Last Message") { Text($0.lastMessageID.map(String.init) ?? "") }
-            TableColumn("Message Time") { Text(DisplayFormat.shortDateTime($0.lastMessageAt)).foregroundStyle(.secondary) }
-            TableColumn("Backfill") { Text(DisplayFormat.shortDateTime($0.lastBackfillAt)).foregroundStyle(.secondary) }
+            TableColumn("Message Time") { TimestampText($0.lastMessageAt) }
+            TableColumn("Backfill") { TimestampText($0.lastBackfillAt) }
         }
     }
 }
@@ -247,7 +241,7 @@ private struct MediaFilesTable: View {
 
     var body: some View {
         Table(files, selection: $selection) {
-            TableColumn("Downloaded") { Text(DisplayFormat.shortDateTime($0.downloadedAt)).foregroundStyle(.secondary) }
+            TableColumn("Downloaded") { TimestampText($0.downloadedAt) }
             TableColumn("Account") { Text($0.accountID) }
             TableColumn("Chat") { file in
                 VStack(alignment: .leading, spacing: 2) {

@@ -16,7 +16,7 @@ struct DashboardView: View {
 
     private var connectedDashboard: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
                 header
                 metrics
                 recentMessages
@@ -44,11 +44,6 @@ struct DashboardView: View {
             }
             .tint(validationTint)
             .disabled(model.isLoading)
-            Button {
-                model.openConsole()
-            } label: {
-                Label("Open Console", systemImage: "safari")
-            }
         }
     }
 
@@ -66,16 +61,7 @@ struct DashboardView: View {
     }
 
     private var validationTint: Color {
-        switch model.validationStatus {
-        case .verified:
-            .green
-        case .validating:
-            .orange
-        case .unverified:
-            .secondary
-        case .failed:
-            .red
-        }
+        validationBadgeKind.tint
     }
 
     private var metrics: some View {
@@ -86,7 +72,7 @@ struct DashboardView: View {
             MetricCard(title: "Operation Errors", value: DisplayFormat.count(state?.operationErrorCount), detail: "Failed, partial, rate limited", systemImage: "exclamationmark.triangle")
             MetricCard(title: "Schema", value: state?.schemaVersionText ?? "-", detail: "Core archive schema", systemImage: "square.stack.3d.up")
             MetricCard(title: "Database", value: state?.databaseID ?? "-", detail: "Archive identity", systemImage: "cylinder")
-            MetricCard(title: "Server Time", value: DisplayFormat.shortDateTime(state?.serverTime), detail: "Core clock", systemImage: "clock")
+            MetricCard(title: "Server Time", value: "", detail: "Core clock", systemImage: "clock", timestamp: state?.serverTime ?? "")
             MetricCard(title: "API Contract", value: model.dashboard.apiManifest?.contractVersion ?? "-", detail: "Live manifest version", systemImage: "doc.badge.gearshape")
             MetricCard(title: "Contract Hash", value: model.dashboard.apiManifest?.contractHash ?? "-", detail: "Compatibility fingerprint", systemImage: "number")
         }
@@ -98,11 +84,6 @@ struct DashboardView: View {
                 Text("Recent Messages")
                     .font(.headline)
                 Spacer()
-                Button {
-                    Task { await model.loadDashboard() }
-                } label: {
-                    Label("Reload", systemImage: "arrow.clockwise")
-                }
             }
             if model.dashboard.recentMessages.isEmpty {
                 EmptyStateView(title: "No messages loaded", detail: "Refresh the dashboard after connecting to a core profile.", systemImage: "bubble.left")
@@ -255,7 +236,7 @@ private struct DashboardOnboardingView: View {
             Text("Set up a local Core")
                 .font(.headline)
 
-            DashboardSetupStep(
+            SetupStepRow(
                 number: 1,
                 title: "Install tele-mess-core",
                 detail: managedState.isInstalled
@@ -263,27 +244,27 @@ private struct DashboardOnboardingView: View {
                     : (managedState.uvIsAvailable
                         ? "TeleMessEnd installs the pinned PyPI package in its own managed runtime."
                         : "Install uv first; TeleMessEnd uses it to create an isolated managed runtime."),
-                status: managedState.isInstalled ? .complete : .current
+                markerState: managedState.isInstalled ? .complete : .current
             )
 
-            DashboardSetupStep(
+            SetupStepRow(
                 number: 2,
                 title: "Create the workspace configuration",
                 detail: managedState.configurationIsReady
                     ? "config.yml is ready in the local workspace."
                     : "After installation, open Core Settings and enter your Telegram API ID and API hash. TeleMessEnd will create config.yml and save a generated local API token in Keychain.",
-                status: managedState.configurationIsReady
+                markerState: managedState.configurationIsReady
                     ? .complete
                     : (managedState.isInstalled ? .current : .pending)
             )
 
-            DashboardSetupStep(
+            SetupStepRow(
                 number: 3,
                 title: "Start and connect",
                 detail: managedState.processIsRunning
                     ? "The process is running; TeleMessEnd is checking the authenticated Core API."
                     : "Start Core here or from Core Settings, then TeleMessEnd will validate the live API contract.",
-                status: managedState.processIsRunning
+                markerState: managedState.processIsRunning
                     ? .current
                     : (managedState.isInstalled && managedState.configurationIsReady ? .current : .pending)
             )
@@ -335,7 +316,7 @@ private struct DashboardOnboardingView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Last connection attempt", systemImage: "exclamationmark.triangle.fill")
                 .font(.headline)
-                .foregroundStyle(.orange)
+                .foregroundStyle(StatusBadgeKind.warning.tint)
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -343,10 +324,10 @@ private struct DashboardOnboardingView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .background(StatusBadgeKind.warning.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.orange.opacity(0.25))
+                .stroke(StatusBadgeKind.warning.tint.opacity(0.25))
         }
     }
 
@@ -617,74 +598,4 @@ private struct ManagedSetupState {
     var configurationExists: Bool
     var configurationIsReady: Bool
     var processIsRunning: Bool
-}
-
-private struct DashboardSetupStep: View {
-    var number: Int
-    var title: String
-    var detail: String
-    var status: Status
-
-    enum Status {
-        case complete
-        case current
-        case pending
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(iconBackground)
-                    .frame(width: 28, height: 28)
-                if status == .complete {
-                    Image(systemName: "checkmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(iconForeground)
-                } else {
-                    Text("\(number)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(iconForeground)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(stepAccessibilityLabel)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .fontWeight(status == .current ? .semibold : .regular)
-                Text(detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .opacity(status == .pending ? 0.62 : 1)
-    }
-
-    private var iconBackground: Color {
-        switch status {
-        case .complete:
-            .green
-        case .current:
-            .accentColor
-        case .pending:
-            Color.secondary.opacity(0.15)
-        }
-    }
-
-    private var iconForeground: Color {
-        status == .pending ? .secondary : .white
-    }
-
-    private var stepAccessibilityLabel: String {
-        switch status {
-        case .complete:
-            "Step \(number) complete"
-        case .current:
-            "Step \(number), current"
-        case .pending:
-            "Step \(number), pending"
-        }
-    }
 }

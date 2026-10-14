@@ -22,6 +22,7 @@ swiftc \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/LocalCoreProcessController.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/OriginFilters.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/SummarySettings.swift" \
+  "$ROOT_DIR/Sources/TeleMessEnd/Support/StringExtensions.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/SummarySettingsStore.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/Features/Settings/SummaryTargetOptions.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/Support/KeychainStore.swift" \

@@ -10,7 +10,7 @@ struct MessagePointsView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             filters.fixedSize(horizontal: false, vertical: true)
             AdaptiveDetailLayout(hasDetail: selectedPoint != nil) {
                 if model.dailyMessagePoints.isEmpty {
@@ -63,38 +63,35 @@ struct MessagePointsView: View {
                     .onSubmit(refresh)
                 TextField("Date (YYYY-MM-DD)", text: $model.messagePointDateFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
+                    .frame(width: UILayout.standardField)
                     .onSubmit(refresh)
                 TextField("Tags (comma-separated)", text: $model.messagePointTagsFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 190)
+                    .frame(width: UILayout.standardField)
                     .onSubmit(refresh)
-                Button(action: refresh) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
             }
 
             HStack(spacing: 10) {
                 TextField("Account", text: $model.messagePointAccountFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
+                    .frame(width: UILayout.standardField)
                     .onSubmit(refresh)
                 TextField("Origin ID", text: $model.messagePointOriginIDFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 110)
+                    .frame(width: UILayout.compactField)
                     .onSubmit(refresh)
 
                 Picker("Min score", selection: $model.messagePointImportanceMin) {
                     ForEach(1...5, id: \.self) { Text("\($0)").tag($0) }
                 }
                 .pickerStyle(.menu)
-                .frame(width: 118)
+                .frame(width: UILayout.compactField)
 
                 Picker("Max score", selection: $model.messagePointImportanceMax) {
                     ForEach(1...5, id: \.self) { Text("\($0)").tag($0) }
                 }
                 .pickerStyle(.menu)
-                .frame(width: 118)
+                .frame(width: UILayout.compactField)
 
             }
             HStack(spacing: 10) {
@@ -104,7 +101,7 @@ struct MessagePointsView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(width: 170)
+                .frame(width: UILayout.standardField)
 
                 Button {
                     model.clearDailyMessagePointFilters()
@@ -124,9 +121,7 @@ struct MessagePointsView: View {
     private var pointsTable: some View {
         Table(sortedPoints, selection: $selection, sortOrder: $sortOrder) {
             TableColumn("Time", sortUsing: KeyPathComparator(\DailyMessagePoint.occurredAt)) { point in
-                Text(DisplayFormat.shortDateTime(point.occurredAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                TimestampText(point.occurredAt)
             }
             .width(min: 135, ideal: 165)
 
@@ -135,7 +130,7 @@ struct MessagePointsView: View {
                     HStack(spacing: 5) {
                         if point.originImportant {
                             Image(systemName: "star.fill")
-                                .foregroundStyle(.yellow)
+                                .foregroundStyle(StatusBadgeKind.warning.tint)
                         }
                         Text(point.originTitle ?? "\(point.originID)")
                             .lineLimit(1)
@@ -204,11 +199,11 @@ struct MessagePointsView: View {
     private func scoreColor(_ score: Int) -> Color {
         switch score {
         case 5:
-            .red
+            StatusBadgeKind.error.tint
         case 4:
-            .orange
+            StatusBadgeKind.warning.tint
         case 3:
-            .yellow
+            StatusBadgeKind.warning.tint
         default:
             .secondary
         }
@@ -220,24 +215,24 @@ private struct MessagePointDetailPanel: View {
     var point: DailyMessagePoint?
 
     var body: some View {
-        Group {
-            if let point {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        header(point)
-                        metadata(point)
-                        content(point)
-                        importance(point)
-                        telegram(point)
-                        sourceReferences(point)
+        DetailPanel {
+            Group {
+                if let point {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            header(point)
+                            metadata(point)
+                            content(point)
+                            importance(point)
+                            telegram(point)
+                            sourceReferences(point)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial)
     }
 
     private func header(_ point: DailyMessagePoint) -> some View {
@@ -252,7 +247,7 @@ private struct MessagePointDetailPanel: View {
             HStack(spacing: 8) {
                 if point.originImportant {
                     Label("Important origin", systemImage: "star.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(StatusBadgeKind.warning.tint)
                 } else {
                     Label("Regular origin", systemImage: "star")
                         .foregroundStyle(.secondary)
@@ -269,12 +264,12 @@ private struct MessagePointDetailPanel: View {
 
     private func metadata(_ point: DailyMessagePoint) -> some View {
         LazyVGrid(columns: detailColumns, alignment: .leading, spacing: 8) {
-            MessagePointMetadataTile(title: "Occurred", value: DisplayFormat.shortDateTime(point.occurredAt))
-            MessagePointMetadataTile(title: "Date / Timezone", value: "\(point.date) · \(point.timezone)")
-            MessagePointMetadataTile(title: "Account", value: point.accountID)
-            MessagePointMetadataTile(title: "Origin / Topic", value: "\(point.originID) / \(point.topicID)")
-            MessagePointMetadataTile(title: "Message", value: point.messageID.map(String.init) ?? "-")
-            MessagePointMetadataTile(title: "Provider", value: point.provider ?? "-")
+            MetadataTile(title: "Occurred") { TimestampText(point.occurredAt) }
+            MetadataTile(title: "Date / Timezone", value: "\(point.date) · \(point.timezone)")
+            MetadataTile(title: "Account", value: point.accountID)
+            MetadataTile(title: "Origin / Topic", value: "\(point.originID) / \(point.topicID)")
+            MetadataTile(title: "Message", value: point.messageID.map(String.init) ?? "-")
+            MetadataTile(title: "Provider", value: point.provider ?? "-")
         }
     }
 
@@ -300,8 +295,8 @@ private struct MessagePointDetailPanel: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Importance reason")
                 .font(.headline)
-            Text(point.importanceReason?.nilIfBlank ?? "No importance reason recorded.")
-                .foregroundStyle(point.importanceReason?.nilIfBlank == nil ? .secondary : .primary)
+            Text(point.importanceReason?.nilIfEmpty ?? "No importance reason recorded.")
+                .foregroundStyle(point.importanceReason?.nilIfEmpty == nil ? .secondary : .primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -309,7 +304,7 @@ private struct MessagePointDetailPanel: View {
 
     @ViewBuilder
     private func telegram(_ point: DailyMessagePoint) -> some View {
-        if point.telegramDeeplink?.nilIfBlank != nil || point.permalink?.nilIfBlank != nil {
+        if point.telegramDeeplink?.nilIfEmpty != nil || point.permalink?.nilIfEmpty != nil {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Telegram")
                     .font(.headline)
@@ -319,7 +314,7 @@ private struct MessagePointDetailPanel: View {
                             Label("Open Telegram", systemImage: "paperplane")
                         }
                     }
-                    if let permalink = point.permalink?.nilIfBlank,
+                    if let permalink = point.permalink?.nilIfEmpty,
                        let url = URL(string: permalink),
                        permalink != point.telegramDeeplink {
                         Link(destination: url) {
@@ -334,10 +329,10 @@ private struct MessagePointDetailPanel: View {
                         }
                     }
                 }
-                if let deepLink = point.telegramDeeplink?.nilIfBlank {
+                if let deepLink = point.telegramDeeplink?.nilIfEmpty {
                     MessagePointAddressRow(title: "Deep link", value: deepLink)
                 }
-                if let permalink = point.permalink?.nilIfBlank {
+                if let permalink = point.permalink?.nilIfEmpty {
                     MessagePointAddressRow(title: "Permalink", value: permalink)
                 }
             }
@@ -383,32 +378,11 @@ private struct MessagePointScorePill: View {
 
     private var foregroundColor: Color {
         switch score {
-        case 5: .red
-        case 4: .orange
-        case 3: .yellow
+        case 5: StatusBadgeKind.error.tint
+        case 4: StatusBadgeKind.warning.tint
+        case 3: StatusBadgeKind.warning.tint
         default: .secondary
         }
-    }
-}
-
-private struct MessagePointMetadataTile: View {
-    var title: String
-    var value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.callout)
-                .lineLimit(2)
-                .textSelection(.enabled)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 56, alignment: .topLeading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -444,19 +418,12 @@ private extension DailyMessagePoint {
 
     var messagePointPreferredTelegramURL: URL? {
         [telegramDeeplink, permalink]
-            .compactMap { $0?.nilIfBlank }
+            .compactMap { $0?.nilIfEmpty }
             .compactMap(URL.init(string:))
             .first
     }
 
     var messagePointCopyAddress: String? {
-        permalink?.nilIfBlank ?? telegramDeeplink?.nilIfBlank
-    }
-}
-
-private extension String {
-    var nilIfBlank: String? {
-        let value = trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
+        permalink?.nilIfEmpty ?? telegramDeeplink?.nilIfEmpty
     }
 }

@@ -39,7 +39,7 @@ struct LocalCoreSettingsSection: View {
             if let error = model.localRunner.lastError,
                model.localRunner.statusProfileID == draft.id {
                 Text(error)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(StatusBadgeKind.error.tint)
                     .font(.callout)
                     .textSelection(.enabled)
             }
@@ -56,7 +56,7 @@ struct LocalCoreSettingsSection: View {
                     Text("Complete these three steps once. Afterwards, Start & Connect is all you normally need.")
                         .font(.callout.weight(.medium))
 
-                    LocalCoreSetupStep(
+                    SetupStepRow(
                         number: 1,
                         title: "Install Core",
                         detail: installStepDetail(runtime),
@@ -68,7 +68,7 @@ struct LocalCoreSettingsSection: View {
                             if runtime.locateUVExecutable() == nil {
                                 HStack(alignment: .firstTextBaseline) {
                                     Label("uv is required for managed installation.", systemImage: "exclamationmark.triangle")
-                                        .foregroundStyle(.orange)
+                                        .foregroundStyle(StatusBadgeKind.warning.tint)
                                     Spacer()
                                     Link(
                                         "Install uv",
@@ -102,7 +102,7 @@ struct LocalCoreSettingsSection: View {
                         }
                     }
 
-                    LocalCoreSetupStep(
+                    SetupStepRow(
                         number: 2,
                         title: "Configure Workspace",
                         detail: configurationStepDetail(workspace),
@@ -123,7 +123,7 @@ struct LocalCoreSettingsSection: View {
                                     systemImage: "lock.trianglebadge.exclamationmark"
                                 )
                                 .font(.callout)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(StatusBadgeKind.error.tint)
                             }
 
                             if workspace.isReadyForLaunch {
@@ -179,7 +179,7 @@ struct LocalCoreSettingsSection: View {
                                         if let setupError {
                                             Text(setupError)
                                                 .font(.callout)
-                                                .foregroundStyle(.red)
+                                                .foregroundStyle(StatusBadgeKind.error.tint)
                                                 .textSelection(.enabled)
                                         }
 
@@ -212,7 +212,7 @@ struct LocalCoreSettingsSection: View {
                             }
                         }
                     }
-                    LocalCoreSetupStep(
+                    SetupStepRow(
                         number: 3,
                         title: "Start & Connect",
                         detail: connectionStepDetail(runtime, workspace: workspace),
@@ -251,7 +251,7 @@ struct LocalCoreSettingsSection: View {
             }
         } else {
             Label(runtimeConfigurationError, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.red)
+                .foregroundStyle(StatusBadgeKind.error.tint)
                 .font(.callout)
                 .textSelection(.enabled)
             Text("Correct the managed version or use an absolute workspace path.")
@@ -438,7 +438,7 @@ struct LocalCoreSettingsSection: View {
         return .warning
     }
 
-    private func installStepMarkerState(_ runtime: ManagedLocalCoreRuntime) -> LocalCoreSetupMarkerState {
+    private func installStepMarkerState(_ runtime: ManagedLocalCoreRuntime) -> SetupStepState {
         if runtime.isInstalled { return .complete }
         if runtime.locateUVExecutable() == nil || localRunnerFailedForDraft { return .problem }
         return .current
@@ -474,7 +474,7 @@ struct LocalCoreSettingsSection: View {
     private func configurationStepMarkerState(
         _ runtime: ManagedLocalCoreRuntime,
         workspace: LocalCoreWorkspaceStatus
-    ) -> LocalCoreSetupMarkerState {
+    ) -> SetupStepState {
         if workspace.isReadyForLaunch { return .complete }
         if workspace.configurationExists { return .problem }
         return runtime.isInstalled ? .current : .pending
@@ -560,7 +560,7 @@ struct LocalCoreSettingsSection: View {
     private func connectionStepMarkerState(
         _ runtime: ManagedLocalCoreRuntime,
         workspace: LocalCoreWorkspaceStatus
-    ) -> LocalCoreSetupMarkerState {
+    ) -> SetupStepState {
         if isCurrentProfileProcess, model.localRunner.phase == .running { return .complete }
         if workspace.configurationExists && !workspace.configurationIsReadable { return .problem }
         if connectionFailedForDraft && workspace.isReadyForLaunch { return .problem }
@@ -600,113 +600,6 @@ struct LocalCoreSettingsSection: View {
             showsFirstRunSetup = false
         } else {
             setupError = model.lastError
-        }
-    }
-}
-
-private enum LocalCoreSetupMarkerState: Equatable {
-    case pending
-    case current
-    case complete
-    case problem
-}
-
-private struct LocalCoreSetupStep<Content: View>: View {
-    let number: Int
-    let title: String
-    let detail: String
-    let status: String
-    let statusKind: StatusBadgeKind
-    let markerState: LocalCoreSetupMarkerState
-    let content: Content
-
-    init(
-        number: Int,
-        title: String,
-        detail: String,
-        status: String,
-        statusKind: StatusBadgeKind,
-        markerState: LocalCoreSetupMarkerState,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.number = number
-        self.title = title
-        self.detail = detail
-        self.status = status
-        self.statusKind = statusKind
-        self.markerState = markerState
-        self.content = content()
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            marker
-                .padding(.top, 1)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(title)
-                        .font(.headline)
-                    Spacer(minLength: 8)
-                    StatusBadge(text: status, kind: statusKind)
-                }
-
-                Text(detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                content
-            }
-        }
-        .padding(.vertical, 5)
-    }
-
-    @ViewBuilder
-    private var marker: some View {
-        if markerState == .complete {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title3)
-                .foregroundStyle(.green)
-                .frame(width: 24, height: 24)
-                .accessibilityLabel("Step \(number) complete")
-        } else {
-            Text("\(number)")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(markerForeground)
-                .frame(width: 22, height: 22)
-                .background(markerBackground, in: Circle())
-                .overlay {
-                    Circle()
-                        .stroke(markerForeground.opacity(0.55), lineWidth: 1)
-                }
-                .accessibilityLabel("Step \(number)")
-        }
-    }
-
-    private var markerForeground: Color {
-        switch markerState {
-        case .pending:
-            .secondary
-        case .current:
-            .accentColor
-        case .complete:
-            .green
-        case .problem:
-            .red
-        }
-    }
-
-    private var markerBackground: Color {
-        switch markerState {
-        case .pending:
-            Color.secondary.opacity(0.08)
-        case .current:
-            Color.accentColor.opacity(0.12)
-        case .complete:
-            Color.green.opacity(0.12)
-        case .problem:
-            Color.red.opacity(0.12)
         }
     }
 }

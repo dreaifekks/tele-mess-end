@@ -165,7 +165,7 @@ private struct StatusBar: View {
                     .controlSize(.small)
             }
             Text(model.lastError ?? model.statusMessage)
-                .foregroundStyle(model.lastError == nil ? Color.secondary : Color.red)
+                .foregroundStyle(model.lastError == nil ? Color.secondary : StatusBadgeKind.error.tint)
                 .lineLimit(1)
             Spacer()
             if let profile = model.selectedProfile {

@@ -88,7 +88,7 @@ struct DailySummaryView: View {
                 Text(model.summarySettingsStore.settings.scheduleText)
                     .font(.title3.monospacedDigit())
                 if let job = model.latestDailySummaryJob {
-                    StatusBadge(text: "Job \(job.status)", kind: statusKind(job.status))
+                    StatusBadge(text: "Job \(job.status)", kind: summaryJobStatusKind(job.status))
                 }
                 Spacer()
                 Button {
@@ -104,11 +104,6 @@ struct DailySummaryView: View {
                         Label("Cancel", systemImage: "xmark.circle")
                     }
                     .disabled(model.isLoading)
-                }
-                Button {
-                    Task { await model.refreshDailySummaryProgress() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 Toggle("Show Deleted", isOn: $model.includeDeletedDailySummaryRecords)
                     .toggleStyle(.checkbox)
@@ -223,13 +218,13 @@ struct DailySummaryView: View {
                     HStack(spacing: 6) {
                         if record.important == true {
                             Image(systemName: "star.fill")
-                                .foregroundStyle(.yellow)
+                                .foregroundStyle(StatusBadgeKind.warning.tint)
                         }
                         Text(record.title ?? record.summaryID)
                             .lineLimit(1)
                         if record.deleted == true {
                             Image(systemName: "trash.fill")
-                                .foregroundStyle(.red)
+                                .foregroundStyle(StatusBadgeKind.error.tint)
                                 .help("Deleted")
                         }
                     }
@@ -262,8 +257,7 @@ struct DailySummaryView: View {
 
         TableColumn("Updated", sortUsing: KeyPathComparator(\DailySummaryRecord.updatedSortValue)) { record in
             recordCell(record) {
-                Text(DisplayFormat.shortDateTime(record.updatedAt ?? record.createdAt))
-                    .foregroundStyle(.secondary)
+                TimestampText(record.updatedAt ?? record.createdAt)
             }
         }
     }
@@ -400,19 +394,6 @@ struct DailySummaryView: View {
         }
     }
 
-    private func statusKind(_ status: String) -> StatusBadgeKind {
-        switch status.lowercased() {
-        case "completed":
-            .success
-        case "failed":
-            .error
-        case "cancel_requested", "cancelled", "canceled":
-            .warning
-        default:
-            .neutral
-        }
-    }
-
     private func jobDetail(_ job: DailySummaryJob) -> String {
         if let error = job.error, !error.isEmpty {
             return error
@@ -448,7 +429,7 @@ private struct SummaryProgressMeter: View {
             HStack(spacing: 8) {
                 Text(title)
                     .font(.headline)
-                StatusBadge(text: status, kind: statusKind)
+                StatusBadge(text: status, kind: summaryJobStatusKind(status))
                 if let label, !label.isEmpty {
                     Text(label)
                         .foregroundStyle(.secondary)
@@ -481,18 +462,6 @@ private struct SummaryProgressMeter: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private var statusKind: StatusBadgeKind {
-        switch status.lowercased() {
-        case "completed":
-            .success
-        case "failed":
-            .error
-        case "cancel_requested", "cancelled", "canceled":
-            .warning
-        default:
-            .neutral
-        }
-    }
 }
 
 private enum SummaryFocusArea: Hashable {
@@ -509,79 +478,79 @@ private struct SummaryRecordDetailPanel: View {
     var onRestore: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if let record {
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(record.title ?? record.summaryID)
-                                .font(.headline)
-                                .lineLimit(2)
-                            if record.deleted == true {
-                                Image(systemName: "trash.fill")
-                                    .foregroundStyle(.red)
-                                    .help("Deleted")
+        DetailPanel {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let record {
+                        HStack(alignment: .top, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(record.title ?? record.summaryID)
+                                        .font(.headline)
+                                        .lineLimit(2)
+                                    if record.deleted == true {
+                                        Image(systemName: "trash.fill")
+                                            .foregroundStyle(StatusBadgeKind.error.tint)
+                                            .help("Deleted")
+                                    }
+                                }
+                                Label(record.recordTypeDisplayName, systemImage: summaryRecordTypeSystemImage(record.recordType))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if selectedCount > 1 {
+                                    Text("\(selectedCount) records selected")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button {
+                                onToggleExpanded()
+                            } label: {
+                                Label(isExpanded ? "Collapse" : "Expand", systemImage: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            }
+                            .disabled(record.contentPreview.isEmpty && record.contentMD == nil)
+                        }
+
+                        LazyVGrid(columns: detailColumns, alignment: .leading, spacing: 8) {
+                            MetadataTile(title: "Type", value: record.recordTypeDisplayName)
+                            MetadataTile(title: "Date", value: record.date ?? "-")
+                            MetadataTile(title: "Provider", value: record.provider ?? "-")
+                        }
+
+                        if record.contentMD == nil {
+                            Button {
+                                Task { await model.loadDailySummaryRecordContent(record) }
+                            } label: {
+                                Label("Load Content", systemImage: "arrow.down.doc")
                             }
                         }
-                        Label(record.recordTypeDisplayName, systemImage: summaryRecordTypeSystemImage(record.recordType))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if selectedCount > 1 {
-                            Text("\(selectedCount) records selected")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if record.deleted == true {
+                            Button {
+                                onRestore()
+                            } label: {
+                                Label("Restore", systemImage: "arrow.uturn.backward")
+                            }
+                            .disabled(model.isLoading)
+                        } else {
+                            Button(role: .destructive) {
+                                onDelete()
+                            } label: {
+                                Label(selectedCount > 1 ? "Delete Selected" : "Delete", systemImage: "trash")
+                            }
+                            .disabled(model.isLoading)
                         }
-                    }
-                    Spacer()
-                    Button {
-                        onToggleExpanded()
-                    } label: {
-                        Label(isExpanded ? "Collapse" : "Expand", systemImage: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(record.contentPreview.isEmpty && record.contentMD == nil)
-                }
 
-                LazyVGrid(columns: detailColumns, alignment: .leading, spacing: 8) {
-                    SummaryMetadataTile(title: "Type", value: record.recordTypeDisplayName)
-                    SummaryMetadataTile(title: "Date", value: record.date ?? "-")
-                    SummaryMetadataTile(title: "Provider", value: record.provider ?? "-")
-                }
-
-                if record.contentMD == nil {
-                    Button {
-                        Task { await model.loadDailySummaryRecordContent(record) }
-                    } label: {
-                        Label("Load Content", systemImage: "arrow.down.doc")
+                        MarkdownContentView(markdown: record.contentMD ?? record.contentPreview)
+                            .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
-                if record.deleted == true {
-                    Button {
-                        onRestore()
-                    } label: {
-                        Label("Restore", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(model.isLoading)
-                } else {
-                    Button(role: .destructive) {
-                        onDelete()
-                    } label: {
-                        Label(selectedCount > 1 ? "Delete Selected" : "Delete", systemImage: "trash")
-                    }
-                    .disabled(model.isLoading)
-                }
-
-                ScrollView {
-                    MarkdownContentView(markdown: record.contentMD ?? record.contentPreview)
-                        .padding(12)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.thinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial)
     }
 
     private var detailColumns: [GridItem] {
@@ -600,27 +569,6 @@ private func summaryRecordTypeSystemImage(_ recordType: String) -> String {
         "list.bullet.rectangle.portrait"
     default:
         "doc.text"
-    }
-}
-
-private struct SummaryMetadataTile: View {
-    var title: String
-    var value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.callout)
-                .lineLimit(2)
-                .textSelection(.enabled)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 56, alignment: .topLeading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -751,3 +699,16 @@ private struct MarkdownContentView: View {
         return AttributedString(text)
     }
 }
+
+private func summaryJobStatusKind(_ status: String) -> StatusBadgeKind {
+        switch status.lowercased() {
+        case "completed":
+            .success
+        case "failed":
+            .error
+        case "cancel_requested", "cancelled", "canceled":
+            .warning
+        default:
+            .neutral
+        }
+    }

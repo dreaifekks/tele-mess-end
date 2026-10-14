@@ -11,7 +11,7 @@ struct OriginsView: View {
     @State private var lastClickedOriginID: CoreOrigin.ID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             filters.fixedSize(horizontal: false, vertical: true)
             AdaptiveDetailLayout(hasDetail: !inspectorOrigins.isEmpty) {
                 originsTable
@@ -71,7 +71,7 @@ struct OriginsView: View {
                         Text(accountID).tag(accountID)
                     }
                 }
-                .frame(width: 170)
+                .frame(width: UILayout.standardField)
                 Picker("Type", selection: $model.originTypeFilter) {
                     Text("Any type").tag("")
                     Text("Group").tag("group")
@@ -81,7 +81,7 @@ struct OriginsView: View {
                     Text("Configured").tag("configured_chat")
                     Text("Unknown").tag("unknown")
                 }
-                .frame(width: 150)
+                .frame(width: UILayout.standardField)
             }
             HStack {
                 Picker("Backup", selection: $model.originBackupFilter) {
@@ -89,18 +89,13 @@ struct OriginsView: View {
                         Text(filter.title).tag(filter)
                     }
                 }
-                .frame(width: 150)
+                .frame(width: UILayout.standardField)
                 Toggle("Archived", isOn: $model.includeArchivedOrigins)
-                Button {
-                    Task { await model.loadOrigins() }
-                } label: {
-                    Label("Reload", systemImage: "arrow.clockwise")
-                }
-            }
-            HStack {
                 TextField("Tag filter", text: $model.originTagFilter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
+                    .frame(width: UILayout.standardField)
+            }
+            HStack {
                 Toggle("Backup First", isOn: $model.originBackupFirst)
                 Button {
                     sortOrder.removeAll()
@@ -156,7 +151,7 @@ struct OriginsView: View {
                     }
                     if origin.important {
                         Image(systemName: "star.fill")
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(StatusBadgeKind.warning.tint)
                             .help("Important")
                     }
                     VStack(alignment: .leading, spacing: 2) {
@@ -205,7 +200,7 @@ struct OriginsView: View {
 
         TableColumn("Last Message", sortUsing: KeyPathComparator(\CoreOrigin.lastMessageSortValue)) { origin in
             selectableCell(origin) {
-                Text(DisplayFormat.shortDateTime(origin.lastMessageAt))
+                TimestampText(origin.lastMessageAt)
                     .foregroundStyle(origin.important ? Color.primary.opacity(0.76) : Color.secondary)
             }
         }
@@ -304,17 +299,20 @@ struct OriginsView: View {
         }
     }
 
+    @ViewBuilder
     private func selectableCell<Content: View>(
         _ origin: CoreOrigin,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        content()
+        let cell = content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 5)
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
-            .onTapGesture {
-                guard !manageMode else { return }
+        if manageMode {
+            cell
+        } else {
+            cell.onTapGesture {
                 DispatchQueue.main.async {
                     if model.selectedOriginID == origin.id, lastClickedOriginID == origin.id {
                         model.selectedOriginID = nil
@@ -325,6 +323,7 @@ struct OriginsView: View {
                     }
                 }
             }
+        }
     }
 
     private func groupKey(for origin: CoreOrigin) -> String {
@@ -390,25 +389,25 @@ private struct OriginInspectorView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if selectedOrigins.count > 1 {
-                    bulkControls
-                } else if let origin = selectedOrigins.first {
-                    singleOriginControls(origin)
-                } else {
-                    EmptyStateView(title: "Select an origin", detail: "Pick a row to edit backup policy and archive state.", systemImage: "rectangle.stack")
+        DetailPanel {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if selectedOrigins.count > 1 {
+                        bulkControls
+                    } else if let origin = selectedOrigins.first {
+                        singleOriginControls(origin)
+                    } else {
+                        EmptyStateView(title: "Select an origin", detail: "Pick a row to edit backup policy and archive state.", systemImage: "rectangle.stack")
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .scrollIndicators(.automatic)
+            .onChange(of: selectedOriginIDs) {
+                syncPolicy()
+            }
+            .onAppear(perform: syncPolicy)
         }
-        .scrollIndicators(.automatic)
-        .background(.regularMaterial)
-        .onChange(of: selectedOriginIDs) {
-            syncPolicy()
-        }
-        .onAppear(perform: syncPolicy)
     }
 
     private var bulkControls: some View {
@@ -528,12 +527,5 @@ private struct OriginInspectorView: View {
         downloadMedia = policy.downloadMedia
         important = origin.important
         tags = policy.tags ?? ""
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

@@ -19,16 +19,11 @@ struct AccountsView: View {
             accountForm
                 .frame(minWidth: 300, idealWidth: 360, maxWidth: 420)
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Accounts")
                         .font(.headline)
                     Spacer()
-                    Button {
-                        Task { await model.loadAccounts() }
-                    } label: {
-                        Label("Reload", systemImage: "arrow.clockwise")
-                    }
                 }
 
                 if model.accounts.isEmpty {
@@ -268,19 +263,18 @@ private struct AccountsTable: View {
             }
             TableColumn("Last Error") { account in
                 Text(account.lastError ?? "")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(StatusBadgeKind.error.tint)
                     .lineLimit(2)
             }
             TableColumn("Updated") { account in
-                Text(DisplayFormat.shortDateTime(account.authUpdatedAt ?? account.updatedAt))
-                    .foregroundStyle(.secondary)
+                TimestampText(account.authUpdatedAt ?? account.updatedAt)
             }
             TableColumn("Delete") { account in
                 Button(role: .destructive) {
                     requestDelete(account)
                 } label: {
                     Image(systemName: "trash")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(StatusBadgeKind.error.tint)
                 }
                 .buttonStyle(.borderless)
                 .disabled(isLoading)
@@ -303,12 +297,5 @@ private struct AccountsTable: View {
         default:
             return .neutral
         }
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

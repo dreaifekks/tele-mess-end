@@ -4,7 +4,7 @@ struct MessagesView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
                 TextField("Search messages", text: $model.messageSearchQuery)
                     .textFieldStyle(.roundedBorder)

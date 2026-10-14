@@ -12,6 +12,7 @@ swiftc \
   -module-cache-path "$ROOT_DIR/.build/module-cache" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreAPI/CoreAPIModels.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/CoreRuntime/SummarySettings.swift" \
+  "$ROOT_DIR/Sources/TeleMessEnd/Support/StringExtensions.swift" \
   "$ROOT_DIR/Tests/SummarySettingsTests/main.swift" \
   -o "$BINARY"
 

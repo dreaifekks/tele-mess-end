@@ -188,9 +188,9 @@ private struct ApplicationRuntimeLogRow: View {
         case .info:
             .primary
         case .warning:
-            .orange
+            StatusBadgeKind.warning.tint
         case .error:
-            .red
+            StatusBadgeKind.error.tint
         }
     }
 }

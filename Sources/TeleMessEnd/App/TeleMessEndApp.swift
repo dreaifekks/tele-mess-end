@@ -38,10 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct TeleMessEndApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @State private var updateChecker = UpdateChecker()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         Window("Tele Mess End", id: "main") {
-            ContentView(model: model)
+            ContentView(model: model, updateChecker: updateChecker)
                 .frame(minWidth: 980, minHeight: 640)
                 .onAppear {
                     appDelegate.shutdownHandler = {
@@ -54,6 +56,21 @@ struct TeleMessEndApp: App {
         }
         .defaultSize(width: 1180, height: 760)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task {
+                        await updateChecker.check(manually: true)
+                        if updateChecker.availableUpdate != nil {
+                            model.selectedSection = .dashboard
+                        }
+                        if updateChecker.availableUpdate != nil || updateChecker.showsUpToDate {
+                            openWindow(id: "main")
+                        }
+                    }
+                }
+                .disabled(updateChecker.isChecking)
+            }
+
             CommandMenu("Core") {
                 Button("Refresh") {
                     Task { await model.refreshCurrentSection() }

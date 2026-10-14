@@ -27,6 +27,7 @@ swiftc \
   "$ROOT_DIR/Sources/TeleMessEnd/Features/Settings/SummaryTargetOptions.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/Support/KeychainStore.swift" \
   "$ROOT_DIR/Sources/TeleMessEnd/Support/Log.swift" \
+  "$ROOT_DIR/Sources/TeleMessEnd/Support/UpdateChecker.swift" \
   "$ROOT_DIR/Tests/RuntimeStateTests/main.swift" \
   -o "$BINARY"
 

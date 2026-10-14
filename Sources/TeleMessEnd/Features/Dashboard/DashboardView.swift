@@ -2,13 +2,19 @@ import SwiftUI
 
 struct DashboardView: View {
     @Bindable var model: AppModel
+    @Bindable var updateChecker: UpdateChecker
 
     var body: some View {
         Group {
             if model.dashboard.coreState != nil {
                 connectedDashboard
             } else {
-                DashboardOnboardingView(model: model)
+                VStack(alignment: .leading, spacing: 0) {
+                    if updateChecker.availableUpdate != nil {
+                        updateNotice.padding(20)
+                    }
+                    DashboardOnboardingView(model: model)
+                }
             }
         }
         .navigationTitle("Dashboard")
@@ -27,23 +33,41 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(model.selectedProfile?.name ?? "No Profile")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text(model.selectedProfile?.baseURLString ?? "Create a profile in Settings")
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.selectedProfile?.name ?? "No Profile")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    Text(model.selectedProfile?.baseURLString ?? "Create a profile in Settings")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                StatusBadge(text: model.validationStatus.title, kind: validationBadgeKind)
+                Button {
+                    Task { await model.validateActiveProfile() }
+                } label: {
+                    Label("Validate", systemImage: model.validationStatus.systemImage)
+                }
+                .tint(validationTint)
+                .disabled(model.isLoading)
             }
-            Spacer()
-            StatusBadge(text: model.validationStatus.title, kind: validationBadgeKind)
-            Button {
-                Task { await model.validateActiveProfile() }
-            } label: {
-                Label("Validate", systemImage: model.validationStatus.systemImage)
+            updateNotice
+        }
+    }
+
+    @ViewBuilder
+    private var updateNotice: some View {
+        if let update = updateChecker.availableUpdate {
+            HStack(spacing: 8) {
+                Text("TeleMessEnd \(update.version) available")
+                    .lineLimit(1)
+                Link("Download", destination: update.url)
+                    .buttonStyle(.bordered)
+                Button("Skip") {
+                    updateChecker.skip()
+                }
             }
-            .tint(validationTint)
-            .disabled(model.isLoading)
         }
     }
 

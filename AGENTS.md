@@ -19,9 +19,8 @@ If the value is displayed as plist data, use `PlistBuddy` against
 print or store Keychain tokens in logs, responses, commits, or memory.
 
 For a remote core profile, use the selected profile's `baseURLString` as
-`CORE_BASE_URL`. For the devNuc deployment this is commonly
-`http://100.92.194.31:8765`, but verify the selected profile instead of assuming
-it. Confirm the live API with the manifest and capability endpoints:
+`CORE_BASE_URL`. Read it from the selected profile instead of assuming a host.
+Confirm the live API with the manifest and capability endpoints:
 
 ```bash
 curl -sS -H "Authorization: Bearer $CORE_API_TOKEN" "$CORE_BASE_URL/manage/api-manifest"

@@ -17,6 +17,10 @@ running on another machine, or install and run one on your Mac for you.
 > This is an early-stage project for a single operator. It is not affiliated
 > with Telegram or OpenAI.
 
+![Dashboard showing archive health and recent messages](docs/images/dashboard.png)
+
+*Screenshots use fictional data from an isolated local demo.*
+
 ## How it fits with tele-mess-core
 
 [tele-mess-core](https://github.com/dreaifekks/tele-mess-core) does the actual
@@ -55,6 +59,8 @@ read from the Core you are connected to, and every change is made through it.
 
 Sections appear only when the connected Core supports them, so an older Core
 shows fewer sections.
+
+![Daily Summary showing a generated community report](docs/images/daily-summary.png)
 
 ## Requirements
 
@@ -171,6 +177,11 @@ cd tele-mess-end
 
 Without a Developer ID certificate, local builds are ad-hoc signed and are meant
 for testing only.
+
+To take screenshots with fictional data, run `./script/screenshot_app.sh` (requires
+Python 3). It launches a separate app with an isolated preferences domain and a
+local demo server. Quit that app when finished to remove its temporary profile,
+server, and bundle. It does not use your existing profiles or Core workspace.
 
 ## Documentation
 

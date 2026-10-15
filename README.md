@@ -1,195 +1,186 @@
 # Tele Mess End
 
-Native macOS UI for Tele Mess Core.
+[![CI](https://github.com/dreaifekks/tele-mess-end/actions/workflows/ci.yml/badge.svg)](https://github.com/dreaifekks/tele-mess-end/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dreaifekks/tele-mess-end.svg)](https://github.com/dreaifekks/tele-mess-end/releases/latest)
+[![License](https://img.shields.io/github/license/dreaifekks/tele-mess-end.svg)](LICENSE)
 
-This app is intended to manage and inspect a single-user Tele Mess Core service
-that may run either locally on the Mac or remotely on another machine. The Mac
-app talks to the same HTTP API used by the built-in `/console` web UI.
+**A native macOS app for running and managing your
+[tele-mess-core](https://github.com/dreaifekks/tele-mess-core) Telegram
+archive.**
 
-## Product Scope
+Tele Mess End gives you a desktop view of a Tele Mess Core instance: capture
+health, Telegram account login, which chats and topics get archived, archived
+messages and media, and Core's daily analysis reports. It can connect to a Core
+running on another machine, or install and run one on your Mac for you.
 
-V1 surfaces:
+> [!NOTE]
+> This is an early-stage project for a single operator. It is not affiliated
+> with Telegram or OpenAI.
 
-- Dashboard: service status, sync state, recent messages, operation errors, and
-  web console shortcut.
-- Accounts: account metadata plus Telegram auth status, code request, code
-  submit, and 2FA password flow.
-- Origins: table-first management for groups, channels, topics, archive state,
-  discovery, filtering, and backup policy editing.
-- Policies and tags: per-origin text/media/download toggles plus chip-style tag
-  editing.
-- Messages and search: recent messages and full-text search backed by the core.
-- Daily analysis: Core-owned persisted summary artifacts and validated message
-  points, package/summary job progress, soft-delete/restore, schedule scope, and
-  Telegram delivery targets. Full per-origin analysis continues for the selected
-  scope; Core delivers the independent important report when present, followed
-  by a separate point digest with fixed `#point`.
-- Diagnostics: operation events, capture cursors, participants, participant
-  refresh, and media-file metadata.
+## How it fits with tele-mess-core
 
-## Core Connection Model
+[tele-mess-core](https://github.com/dreaifekks/tele-mess-core) does the actual
+work. It connects to Telegram, stores messages in a SQLite archive, runs daily
+analysis jobs, and exposes a token-protected HTTP API.
 
-The app supports multiple saved core profiles:
+Tele Mess End is a client for that API, the same one used by Core's built-in
+`/console` web UI. The app keeps no copy of your archive. Everything you see is
+read from the Core you are connected to, and every change is made through it.
 
-- Remote core: base URL plus API token.
-- Managed local core: a pinned `tele-mess-core` PyPI version, workspace, API
-  token, and process lifecycle owned by the Mac app.
-- Custom local core: an explicit shell command and optional working directory for
-  development or nonstandard installations.
+## Features
 
-The managed runtime uses `uv tool install` against an explicit public-PyPI
-default index, with source-changing `UV_*`/`PIP_*` environment overrides
-filtered and app-specific tool, bin, and cache directories under
-`~/Library/Application Support/TeleMessEnd/CoreRuntime`; it does not depend on
-an incidental `uvx` cache or the GUI app's shell startup files. The default Core workspace is
-`~/Library/Application Support/tele-mess-core`. A fresh workspace collects the
-Telegram API ID/hash, creates `config.yml` without overwriting an existing file,
-and restricts it to the current user. The generated Core API token is written to
-that Core-owned config and the profile copy is stored in Keychain; secrets never
-enter app preferences or runtime logs.
+- **Dashboard.** Archive and sync state, the live API contract version, the
+  latest 100 messages, and failed or rate-limited operations, with a shortcut
+  to Core's web console.
+- **Accounts.** Add Telegram accounts and sign in with a login code and an
+  optional two-step verification password.
+- **Origins.** Discover the groups, channels, and forum topics your accounts can
+  see. Filter, sort, archive, or restore them, and set per-origin backup
+  policies and tags.
+- **Messages.** Browse recent messages, run full-text search, and jump to the
+  original message in Telegram.
+- **Media.** Filter archived media by type, preview it inside the app, and open
+  or copy the download link.
+- **Daily Summary.** Start or cancel Core's daily analysis, follow job progress,
+  read the generated reports, and soft-delete or restore them.
+- **Message Points.** Browse the validated key points Core extracted from each
+  day, filter them by importance score, and follow links back to the source
+  messages.
+- **Diagnostics.** Inspect operation events, capture cursors, and chat
+  participants, and view the raw payload behind any row.
+- **Settings.** Save several Core profiles and switch between them. Configure the
+  daily analysis schedule, its scope, and delivery to a Telegram chat.
+- **Updates.** The app checks for new releases once a day and installs them
+  through the standard **Check for Updates…** menu command.
 
-Managed Core `0.3.0` starts as the structured command
-`tele-mess-core run-local --workspace <absolute-path> --web`. The app waits for
-an authenticated `/healthz` response and the API manifest before marking the
-process ready. Stop, profile switching, and app termination signal the process;
-normal Start/Stop actions wait for the previous process to exit before another
-one can launch.
+Sections appear only when the connected Core supports them, so an older Core
+shows fewer sections.
 
-Selecting a different profile starts a new Core session. Core-derived data and
-feature selections are cleared, in-flight results from the old profile are
-discarded, and the visible section is reloaded against the newly selected Core.
-Local profiles with authentication disabled can run background refreshes without
-opening Keychain UI.
+## Requirements
 
-## Technical Direction
+- macOS 14 Sonoma or later.
+- A Mac with Apple silicon for the prebuilt download. On an Intel Mac, build from
+  source.
+- A Tele Mess Core instance to connect to, or the ability to run one locally.
+- For a local Core managed by the app: [uv](https://docs.astral.sh/uv/getting-started/installation/)
+  and a Telegram API ID and hash from [my.telegram.org](https://my.telegram.org/apps).
 
-The first implementation should be a native SwiftUI macOS app rather than an
-Electron, Tauri, or web-wrapper app. The current decision record is in
-[`docs/adr/0001-macos-app-stack.md`](docs/adr/0001-macos-app-stack.md).
+Daily analysis is configured on the Core side. See the tele-mess-core
+[daily-packaging guide](https://github.com/dreaifekks/tele-mess-core/blob/master/docs/daily-packaging.md)
+before enabling it.
 
-Profile-session, state-ownership, and verification decisions are recorded in
-[`docs/adr/0002-profile-session-and-state-ownership.md`](docs/adr/0002-profile-session-and-state-ownership.md).
+## Installation
 
-Core API mapping is tracked in
-[`docs/core-api-surface.md`](docs/core-api-surface.md).
+1. Download the latest `TeleMessEnd-<version>-macos-arm64.dmg` from
+   [GitHub Releases](https://github.com/dreaifekks/tele-mess-end/releases/latest).
+2. Open the DMG and drag **TeleMessEnd** into **Applications**.
+3. Launch it from Applications.
 
-V1 implementation scope is tracked in [`docs/v1-scope.md`](docs/v1-scope.md).
+Release builds are signed with a Developer ID certificate and notarized by
+Apple. Each release's notes state how that build was signed.
 
-## Repository Status
+## Getting started
 
-This repository contains the SwiftPM macOS app, typed Core API client,
-profile-scoped session/runtime state, Core-owned summary and message-point
-workflows, CI/release verification, and the project-local Codex Run action.
+Open **Settings** with ⌘, and choose the **Core** tab. On first launch the app
+already contains a **Local Core** profile. Pick the connection mode that matches
+your setup:
 
-Run locally:
-
-```bash
-./script/build_and_run.sh
-```
-
-Build a local DMG for testing:
-
-```bash
-./script/package_macos.sh
-```
-
-Both scripts sign with the first `Developer ID Application` identity found in
-the keychain, so rebuilt apps keep one signing identity and stored Keychain
-tokens stay readable. When no such identity exists they fall back to ad-hoc
-signing, which is only intended for local testing. Override the choice with
-`CODESIGN_IDENTITY`:
-
-```bash
-CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./script/package_macos.sh
-CODESIGN_IDENTITY=- ./script/build_and_run.sh   # force ad-hoc
-```
-
-To notarize and staple the DMG locally, store notarization credentials once and
-pass the profile name:
-
-```bash
-xcrun notarytool store-credentials tele-mess-end-notary \
-  --key /path/to/AuthKey_KEYID.p8 --key-id KEYID --issuer ISSUER_UUID
-NOTARIZE=1 NOTARYTOOL_KEYCHAIN_PROFILE=tele-mess-end-notary ./script/package_macos.sh
-```
-
-Publish a GitHub Release DMG by pushing a version tag that matches `VERSION`:
-
-```bash
-git tag "v$(tr -d '[:space:]' < VERSION)"
-git push origin "v$(tr -d '[:space:]' < VERSION)"
-```
-
-The release workflow runs on a GitHub-hosted macOS runner, builds the DMG, and
-uploads it to the matching GitHub Release. It reads these repository secrets:
-
-| Secret | Purpose |
+| Mode | Choose it when |
 | --- | --- |
-| `MACOS_SIGNING_P12` | Base64 of the Developer ID Application `.p12`, including the intermediate chain |
-| `MACOS_SIGNING_PASSWORD` | Password of that `.p12` |
-| `APPLE_API_KEY_P8_BASE64` | Base64 of the App Store Connect API key used for notarization |
-| `APPLE_API_KEY_ID` | Key ID of that API key |
-| `APPLE_API_ISSUER_ID` | Issuer ID of that API key |
-| `SPARKLE_PRIVATE_KEY` | Contents of the exported Sparkle EdDSA private key; required for tag releases |
+| Remote | Core already runs on a server, NAS, or another Mac. |
+| Managed local | You want the app to install and run Core on this Mac. This is the easiest start. |
+| Custom local | You run Core from your own command, such as a source checkout. |
 
-First-time Sparkle setup: run `.build/artifacts/sparkle/Sparkle/bin/generate_keys
---account com.dreaifekks.TeleMessEnd` after `swift package resolve`; the public key
-belongs in `SUPublicEDKey` in the Info.plist generated by both bundle scripts.
-The committed public key already matches the locally generated TeleMessEnd key.
-Keep the exported private key outside the repository and add its contents as the
-`SPARKLE_PRIVATE_KEY` repository secret. Never commit the private key.
+### Remote Core
 
-Tag releases generate `appcast.xml` from the signed/notarized DMG and publish both
-assets to the same GitHub Release. The workflow currently builds one runner
-architecture, not an architecture matrix; Sparkle's generator records the
-archive's hardware requirements. Users check, download, and install updates with
-Sparkle's standard app-menu command and dialogs.
+1. Choose **Add Remote Core**.
+2. Enter the **Base URL**, for example `http://192.168.1.20:8765`.
+3. Leave **Auth** on **Bearer** unless your Core expects the `X-Api-Token`
+   header.
+4. Paste the Core's `server.token` into **New API token**.
+5. Choose **Save**, then **Test Connection**.
 
-With the signing secrets the DMG is Developer ID signed, and with the API key
-secrets it is also notarized and stapled. Without them the DMG is ad-hoc signed
-and macOS Gatekeeper will warn on first open. The release notes state which of
-the three applies.
+### Managed local Core
 
-To check signing and notarization without publishing, run the workflow manually.
-A manual run stores the DMG as a workflow artifact and leaves Releases alone:
+Use the **Local Core** profile, or choose **Add Local Core**, and keep
+**Runtime** set to **Managed PyPI**. The **Initial Setup** checklist then walks
+you through three steps:
+
+1. **Install Core.** The app uses uv to install a pinned version of
+   `tele-mess-core` into a folder of its own, separate from your other uv
+   tools.
+2. **Configure Workspace.** Enter an account ID, your Telegram API ID and hash,
+   a session name, and a timezone. The app then creates `config.yml` in
+   `~/Library/Application Support/tele-mess-core`. It never overwrites an
+   existing file. If you reuse an existing `config.yml`, enter its
+   `server.token` in the **Connection** section and save.
+3. **Start & Connect.** The app starts Core, waits until it answers, and
+   connects.
+
+After setup, **Start & Connect** is all you need. Quitting the app stops the
+Core it started. The Core version and workspace path can be changed under
+**Advanced runtime settings**.
+
+### Custom local Core
+
+Choose **Add Local Core** and set **Runtime** to **Custom Command**. Enter the
+command that starts your Core and, optionally, a working directory. Then set the
+base URL and token as you would for a remote Core. The command runs through your
+login shell.
+
+### First steps after connecting
+
+1. In **Accounts**, add or select a Telegram account and sign in with the code
+   Telegram sends you.
+2. In **Origins**, choose **Discover** to list the chats your account can see,
+   then enable backup on the ones you want to archive.
+3. Watch new messages arrive in **Dashboard** and **Messages**.
+4. Optionally, set up daily analysis under **Settings → Summary**.
+
+## Privacy and security
+
+- **Tokens stay in Keychain.** Each profile's API token is stored in the macOS
+  Keychain. It is not written to app preferences or to the app's logs.
+- **No local archive.** Messages, media, and reports stay in Core. The app only
+  displays what it reads from the API.
+- **Your credentials stay in your workspace.** For a managed Core, the Telegram
+  API hash and the generated API token live in `config.yml`. The app makes that
+  file readable only by your user account.
+- **A Core configured by the app is local only.** The `config.yml` it creates
+  binds Core to `127.0.0.1` and requires the API token for every request.
+- **Protect remote connections.** The app accepts plain `http://` URLs, so the
+  token travels unencrypted on such connections. Use HTTPS or a private network
+  such as Tailscale for a remote Core.
+- **Deleting a profile keeps your data.** It removes the profile and its saved
+  token. The Core workspace and archive are left in place.
+- **Update checks contact GitHub.** The app fetches the release feed from GitHub
+  once a day.
+
+## Building from source
+
+You need macOS 14 or later and a Swift 5.9 or newer toolchain, from Xcode or
+the Command Line Tools.
 
 ```bash
-gh workflow run release-macos.yml --ref master
+git clone https://github.com/dreaifekks/tele-mess-end.git
+cd tele-mess-end
+./script/build_and_run.sh      # build, bundle, and launch the app
+./script/package_macos.sh      # build a DMG into dist/
+./script/verify.sh             # run the full test suite
 ```
 
-Run the complete local verification gate used by CI and releases:
+Without a Developer ID certificate, local builds are ad-hoc signed and are meant
+for testing only.
 
-```bash
-./script/verify.sh
-```
+## Documentation
 
-It builds the package and runs the mocked Core API contract suite, summary
-settings/DTO tests, profile-session and local-Core lifecycle regressions,
-Markdown parser tests, and the SwiftPM test build. Local runtime tests use
-temporary workspaces and fake commands; they do not install from PyPI or touch
-the user's Core workspace. The executable suites are intentionally independent
-of XCTest because the supported CommandLineTools environment does not provide a
-usable XCTest or Swift Testing module.
-
-Run only the Core API contract tests:
-
-```bash
-./script/test_core_api.sh
-```
-
-These tests compile the typed Core API client with mocked transport fixtures and
-real snake_case response payloads from the core API surface.
-
-Run a read-only live smoke against a running core:
-
-```bash
-CORE_BASE_URL=http://127.0.0.1:8765 CORE_API_TOKEN=your-token ./script/smoke_core_api_live.sh
-```
-
-This compiles the same typed client and checks `/healthz`, `/sync/state`, the API
-manifest/capabilities, accounts, origins, recent messages, operation events,
-participants, cursors, media metadata, and read-only daily-summary and
-message-point surfaces.
+| Document | Contents |
+| --- | --- |
+| [Development notes](docs/development.md) | Architecture, managed runtime internals, code signing, and tests |
+| [Release process](docs/release.md) | Notarization, GitHub Releases, repository secrets, and Sparkle updates |
+| [Core API surface](docs/core-api-surface.md) | How app features map to the Tele Mess Core API |
+| [Design records](docs/adr/) | Architecture decision records |
+| [tele-mess-core](https://github.com/dreaifekks/tele-mess-core) | The archive engine this app connects to |
 
 ## License
 
